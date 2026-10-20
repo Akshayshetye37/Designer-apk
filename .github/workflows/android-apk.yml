@@ -1,18 +1,15 @@
-
 name: Build Aurelia PMS Android APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - 'android/**'
       - 'index.html'
       - 'app.js'
       - '.github/workflows/android-apk.yml'
   pull_request:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,8 +22,8 @@ concurrency:
 jobs:
   build:
     name: Build Debug APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
@@ -34,11 +31,11 @@ jobs:
 
       - name: Verify Android project files
         run: |
-          test -f android/settings.gradle
-          test -f android/build.gradle
-          test -f android/app/build.gradle
-          test -f android/app/src/main/AndroidManifest.xml
-          test -f android/app/src/main/assets/index.html
+          test -s android/settings.gradle
+          test -s android/build.gradle
+          test -s android/app/build.gradle
+          test -s android/app/src/main/AndroidManifest.xml
+          test -s android/app/src/main/assets/index.html
           echo "Android project structure verified."
 
       - name: Set up Java 17
@@ -47,26 +44,39 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
+      # Avoid setup-android's legacy attempt to install the removed SDK "tools" package.
+      # GitHub's Ubuntu runner already includes Android command-line tools.
+      - name: Locate Android SDK
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          test -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" || find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -name sdkmanager -type f
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -name sdkmanager -type f | head -n 1)"
+          fi
+          test -x "$SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "Using $SDKMANAGER"
 
-      - name: Set up Gradle
+      - name: Install stable Android SDK packages
+        run: |
+          yes | "$SDKMANAGER" --licenses >/dev/null
+          "$SDKMANAGER" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate Gradle configuration
+      - name: Validate Gradle project
         run: gradle -p android --no-daemon tasks
 
       - name: Build debug APK
         run: gradle -p android --no-daemon assembleDebug
 
-      - name: Verify APK exists
+      - name: Verify APK and checksum
         run: |
           APK="android/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
@@ -79,4 +89,13 @@ jobs:
           name: aurelia-pms-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aurelia-pms-build-reports
+          path: android/app/build/reports/
+          if-no-files-found: ignore
           retention-days: 14
