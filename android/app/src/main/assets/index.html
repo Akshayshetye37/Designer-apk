@@ -523,3 +523,70 @@ openRestaurantReceipt=function(s){
 };
 
 </script></body></html>
+
+/* Focused Android reliability patch: toast placement, share intents, WhatsApp, XLSX import and back navigation. */
+(function(){
+ const style=document.createElement('style');
+ style.textContent='#toast{top:auto!important;bottom:calc(104px + env(safe-area-inset-bottom,0px))!important;max-width:calc(100% - 32px);white-space:normal;text-align:center;border-radius:18px;transform:translate(-50%,24px)!important;opacity:0;pointer-events:none}#toast.show{transform:translate(-50%,0)!important;opacity:1}';
+ document.head.appendChild(style);
+})();
+function waS(i){
+ const b=bk(i),g=gOf(b.g),phone=String(g&&g.ph||'').replace(/\D/g,'');
+ const message=itx(b);
+ const url=phone?'https://wa.me/'+phone+'?text='+encodeURIComponent(message):'https://wa.me/?text='+encodeURIComponent(message);
+ if(window.AureliaNative&&nat({type:'openUrl',url}))return;
+ window.location.href=url;
+}
+async function shr(i){
+ const b=bk(i),message=itx(b);
+ try{
+  if(window.AureliaNative&&nat({type:'shareText',title:'Aurelia PMS invoice',text:message}))return;
+  if(navigator.share){await navigator.share({title:'Aurelia PMS invoice',text:message});return;}
+  if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(message);toast('Invoice summary copied. Paste it into a sharing app.');return;}
+  openS('<h3>Share invoice summary</h3><textarea id="sharetext" style="width:100%;min-height:140px;margin:12px 0;padding:12px">'+esc(message)+'</textarea><button class="btn" onclick="navigator.clipboard?.writeText($(\'#sharetext\').value);toast(\'Copied if clipboard is available\')">Copy summary</button><button class="btn ghost" onclick="closeS()">Close</button>');
+ }catch(e){if(e&&e.name!=='AbortError')toast('Unable to open sharing options.');}
+}
+function importXlsxFile(input){
+ const file=input.files&&input.files[0];if(!file)return;
+ const run=async()=>{
+  if(!window.XLSX)await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+  const data=await file.arrayBuffer(),wb=XLSX.read(data,{type:'array',cellDates:true});
+  const sheet=wb.Sheets[wb.SheetNames[0]],rows=XLSX.utils.sheet_to_json(sheet,{defval:''});
+  if(!rows.length)throw new Error('The first worksheet is empty.');
+  const keys=Object.keys(rows[0]).map(k=>k.toLowerCase().trim());
+  const bookingKeys=['guest','guest name','name','room','check-in','checkin','arrival','check-out','checkout','departure'];
+  const isBooking=keys.some(k=>['guest','guest name','name'].includes(k))&&keys.some(k=>k==='room');
+  if(!isBooking){
+   const preview=rows.slice(0,10).map((row,n)=>'<tr><td>'+(n+1)+'</td><td>'+esc(JSON.stringify(row))+'</td></tr>').join('');
+   openS('<h3>Excel import preview</h3><p class="lab">Found '+rows.length+' rows in '+esc(file.name)+'. This sheet does not match the recognised reservation template, so no records were changed.</p><div style="overflow:auto;max-height:45vh"><table>'+preview+'</table></div><button class="btn ghost" onclick="closeS()">Close</button>');
+   return;
+  }
+  const get=(row,names)=>{const key=Object.keys(row).find(k=>names.includes(k.toLowerCase().trim()));return key?row[key]:''};
+  const parseDate=v=>{if(v instanceof Date)return Math.round((new Date(v.getFullYear(),v.getMonth(),v.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000);if(typeof v==='number'&&XLSX.SSF.parse_date_code){const d=XLSX.SSF.parse_date_code(v);if(d)return Math.round((new Date(d.y,d.m-1,d.d,12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)}const d=new Date(v);return isNaN(+d)?null:Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)};
+  const candidates=rows.map(row=>({g:String(get(row,['guest','guest name','name'])||'').trim(),room:String(get(row,['room','room number'])||'').trim(),inn:parseDate(get(row,['check-in','checkin','arrival','arrival date'])),out:parseDate(get(row,['check-out','checkout','departure','departure date']))})).filter(x=>x.g&&x.room&&x.inn!==null&&x.out!==null&&x.out>x.inn);
+  if(!candidates.length)throw new Error('No valid reservations found. Required columns: Guest, Room, Check-in, Check-out.');
+  openS('<h3>Confirm Excel import</h3><p class="lab">Valid reservations: '+candidates.length+'. Existing records will be kept; duplicate guest/room/date rows will be skipped.</p><button class="btn" onclick="commitXlsxImport('+JSON.stringify(candidates).replace(/</g,'\\u003c')+')">Import reservations</button> <button class="btn ghost" onclick="closeS()">Cancel</button>');
+ };
+ run().catch(e=>{console.error(e);toast(e.message||'Excel import failed.');}).finally(()=>{input.value='';});
+}
+function commitXlsxImport(rows){
+ let added=0,skipped=0;
+ rows.forEach(x=>{
+  if(!rm(x.room)){skipped++;return;}
+  if(S.b.some(b=>b.g.toLowerCase()===x.g.toLowerCase()&&String(b.room)===x.room&&b.in===x.inn&&b.out===x.out)){skipped++;return;}
+  S.b.push({id:++id,g:x.g,room:x.room,in:x.inn,out:x.out,st:x.inn<=0&&x.out>0?'in':'res',ch:[],p:0,pays:[],oc:[],veh:[]});added++;
+ });
+ persist();render();closeS();toast('Excel import: '+added+' added, '+skipped+' skipped.');
+}
+const _ioBeforeXlsx=SUB.io;
+if(_ioBeforeXlsx){
+ SUB.io=()=>_ioBeforeXlsx().replace(/<input([^>]*type=["']file["'][^>]*>)/gi,'<input$1').replace(/Import JSON/gi,'Import JSON');
+}
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#sh')?.classList.contains('show'))closeS();});
+
+/* Add a real spreadsheet picker to the existing Import/Export screen. */
+const _aureliaIoOriginal=SUB.io;
+SUB.io=function(){
+ const html=_aureliaIoOriginal();
+ return html.replace('<p class="lab" style="margin-top:14px">Encrypted backup', '<div class="card" style="margin-top:14px"><h3>Import reservations from Excel</h3><p class="lab">Select an .xlsx or .xls file with Guest, Room, Check-in and Check-out columns. Existing reservations are kept.</p><label class="btn sm" style="display:inline-block">Choose Excel file<input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none" onchange="importXlsxFile(this)"></label></div><p class="lab" style="margin-top:14px">Encrypted backup');
+};
