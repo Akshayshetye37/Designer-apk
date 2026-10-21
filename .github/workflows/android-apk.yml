@@ -22,6 +22,38 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Verify web and Android UI match
         run: cmp index.html android/app/src/main/assets/index.html
+      - name: Validate embedded JavaScript syntax
+        run: |
+          python3 - <<'PY'
+          from html.parser import HTMLParser
+          class Scripts(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.inside = False
+                  self.external = False
+                  self.parts = []
+                  self.current = []
+              def handle_starttag(self, tag, attrs):
+                  if tag.lower() == "script":
+                      self.inside = True
+                      self.external = any(k.lower() == "src" for k, _ in attrs)
+                      self.current = []
+              def handle_data(self, data):
+                  if self.inside and not self.external:
+                      self.current.append(data)
+              def handle_endtag(self, tag):
+                  if tag.lower() == "script" and self.inside:
+                      if not self.external:
+                          self.parts.append("".join(self.current))
+                      self.inside = False
+                      self.external = False
+          parser = Scripts()
+          parser.feed(open("index.html", encoding="utf-8").read())
+          if not parser.parts:
+              raise SystemExit("No inline JavaScript found in index.html")
+          open("/tmp/aurelia-inline.js", "w", encoding="utf-8").write("\\n".join(parser.parts))
+          PY
+          node --check /tmp/aurelia-inline.js
       - name: Build APK
         working-directory: android
         run: gradle --no-daemon assembleDebug
