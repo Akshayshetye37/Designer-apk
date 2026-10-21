@@ -583,3 +583,10 @@ if(_ioBeforeXlsx){
  SUB.io=()=>_ioBeforeXlsx().replace(/<input([^>]*type=["']file["'][^>]*>)/gi,'<input$1').replace(/Import JSON/gi,'Import JSON');
 }
 window.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#sh')?.classList.contains('show'))closeS();});
+
+/* Add a real spreadsheet picker to the existing Import/Export screen. */
+const _aureliaIoOriginal=SUB.io;
+SUB.io=function(){
+ const html=_aureliaIoOriginal();
+ return html.replace('<p class="lab" style="margin-top:14px">Encrypted backup', '<div class="card" style="margin-top:14px"><h3>Import reservations from Excel</h3><p class="lab">Select an .xlsx or .xls file with Guest, Room, Check-in and Check-out columns. Existing reservations are kept.</p><label class="btn sm" style="display:inline-block">Choose Excel file<input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none" onchange="importXlsxFile(this)"></label></div><p class="lab" style="margin-top:14px">Encrypted backup');
+};
