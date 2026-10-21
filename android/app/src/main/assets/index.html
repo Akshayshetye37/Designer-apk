@@ -433,4 +433,93 @@ async function ocrUploadedId(file,target){if(!file)return;toast('Reading ID phot
 function applyUploadedOcr(target,d){const dr=S.dr;if(!dr)return;let changed=false;if(target==='main'){if(d.name){dr.g.n=d.name;changed=true}if(d.id){dr.g.idn=d.id;changed=true}}else if(target.startsWith('occ:')){const o=dr.oc[Number(target.split(':')[1])];if(o){if(d.name){o.n=d.name;changed=true}if(d.id){o.idn=d.id;changed=true}}}if(changed){aud('ID OCR','Suggested details from uploaded ID; staff verification required');dsheet();toast('OCR suggestions filled — verify against original')}else toast('ID photo saved; OCR found no confident name/number. Enter manually.')}
 const _aureliaNativeOcrResult=window.aureliaNativeOcrResult;
 window.aureliaNativeOcrResult=(requestId,payload)=>{const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload;applyUploadedOcr(target,{name:d.fullName||d.name||'',id:d.idNumber||d.id||'',text:d.text||''})}catch(e){toast('OCR result could not be read; enter details manually')}return}if(_aureliaNativeOcrResult)_aureliaNativeOcrResult(requestId,payload)};
+
+/* Targeted reliability fixes: ID OCR field routing, Android-safe exports, dynamic UPI QR. */
+function parseIdOcrText(raw){
+ const text=String(raw||'').replace(/\r/g,'');
+ const lines=text.split('\n').map(v=>v.trim()).filter(Boolean);
+ const excluded=/GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|DOB|MALE|FEMALE|ADDRESS|INDIA|INDIAN/i;
+ const labelLine=lines.find(v=>/^(?:full\s*name|name|surname|given\s*names?)\s*[:.-]?\s*\S/i.test(v));
+ let name=labelLine?labelLine.replace(/^(?:full\s*name|name|surname|given\s*names?)\s*[:.-]?\s*/i,'').trim():'';
+ if(!name){const candidate=lines.find(v=>/^[A-Z][A-Z ,.'-]{4,}$/.test(v)&&!excluded.test(v)&&! /\d/.test(v));if(candidate)name=candidate.trim();}
+ const candidates=[];
+ for(const line of lines){if(/DOB|DATE OF BIRTH|PHONE|MOBILE|PIN|POSTAL|ADDRESS/i.test(line))continue;for(const value of (line.match(/[A-Z0-9][A-Z0-9/-]{4,}/ig)||[])){const v=value.replace(/[^A-Z0-9/-]/ig,'');if(/\d/.test(v)&&v.length>=5&&!excluded.test(v))candidates.push(v);}}
+ candidates.sort((a,b)=>b.length-a.length);
+ return {name,id:candidates[0]||'',text:lines.join('\n')};
+}
+async function ocrUploadedId(file,target){
+ if(!file||!S.dr)return;toast('Reading ID photo…');
+ try{
+  if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId];}
+  if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+  const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text));
+ }catch(e){toast('OCR failed. Verify or enter ID details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180));}
+}
+function applyUploadedOcr(target,d){
+ const dr=S.dr;if(!dr)return;let destination=null;
+ if(target==='main')destination=dr.g;
+ else if(String(target).startsWith('occ:'))destination=dr.oc[Number(String(target).split(':')[1])];
+ if(!destination){toast('Matching guest form is no longer open.');return;}
+ const name=String(d.name||d.fullName||'').trim(),id=String(d.id||d.idNumber||'').trim();
+ if(name)destination.n=name;if(id)destination.idn=id;
+ dsheet();
+ const panel=$('#pan');
+ if(panel&&panel.classList.contains('show')){
+  if(target==='main'){if($('#d1'))$('#d1').value=destination.n||'';if($('#d5'))$('#d5').value=destination.idn||'';}
+  else{const row=$('.oc2',panel)[Number(String(target).split(':')[1])];if(row){const ni=row.querySelector('.a'),ii=row.querySelector('.d');if(ni)ni.value=destination.n||'';if(ii)ii.value=destination.idn||'';}}
+ }
+ rdD();
+ toast(name||id?'OCR filled the matching guest fields. Verify before saving.':'Text extracted but name/ID were not confidently identified.');
+ if(d.text)aud('ID OCR','Text extracted; verify suggested guest fields');
+}
+const _aureliaNativeOcrResultFixed=window.aureliaNativeOcrResult;
+window.aureliaNativeOcrResult=(requestId,payload)=>{
+ const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];
+ if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload,parsed=parseIdOcrText(d.text||'');applyUploadedOcr(target,{name:d.fullName||d.name||parsed.name,id:d.idNumber||d.id||parsed.id,text:d.text||''});}catch(e){toast('Could not read OCR result. Enter details manually.');}return;}
+ if(_aureliaNativeOcrResultFixed)_aureliaNativeOcrResultFixed(requestId,payload);
+};
+/* Android WebView-safe PNG export using html2canvas, then native Save As dialog. */
+async function downloadBillPng(elementId,fileName){
+ const el=$('#'+elementId);if(!el){toast('Bill preview not found');return;}
+ try{
+  if(!window.html2canvas)await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
+  const canvas=await window.html2canvas(el,{scale:2,backgroundColor:'#fbf6e8',useCORS:true,logging:false,windowWidth:Math.max(el.scrollWidth,680)});
+  const blob=await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('PNG encoding failed')),'image/png'));
+  const filename=fileName||'invoice.png';
+  if(window.AureliaNative&&nat({type:'saveFile',requestId:'png-'+Date.now(),name:filename,mime:'image/png',data:await fileBase64(blob)})){toast('Choose where to save the PNG');return;}
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;a.rel='noopener';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);toast('PNG bill exported');
+ }catch(e){console.error(e);toast('PNG export failed. Use Print / Save PDF.');}
+}
+/* Dynamic UPI intent QR; amount is generated from the current balance/restaurant bill. */
+function upiIntentUri(amount,guest,reference){
+ const receiver=String(S.set?.upi||S.restaurant?.upi||'').trim();if(!receiver||!receiver.includes('@'))return '';
+ const params=new URLSearchParams({pa:receiver,pn:String(S.set?.name||S.restaurant?.name||'Aurelia PMS'),am:(Math.max(0,Number(amount)||0)).toFixed(2),cu:'INR',tn:'Invoice payment '+String(guest||''),tr:String(reference||('AUR'+Date.now()))});
+ return 'upi://pay?'+params.toString();
+}
+function dynamicUpiQr(amount,guest,reference){
+ const uri=upiIntentUri(amount,guest,reference);if(!uri)return '<div style="padding:12px;color:#7a6a45">Set a valid UPI ID in Settings to generate an amount-specific QR.</div>';
+ const qr='https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=8&data='+encodeURIComponent(uri);
+ return '<img alt="UPI QR for exact amount" src="'+qr+'" style="display:block;width:min(240px,100%);height:auto;margin:12px auto;border:8px solid #fff;background:#fff;border-radius:6px"><div style="font:12px Arial;color:#7a6a45;overflow-wrap:anywhere">UPI ID: '+esc(String(S.set?.upi||S.restaurant?.upi||''))+'</div>';
+}
+const _invBeforeDynamicUpi=inv;
+inv=function(i){
+ _invBeforeDynamicUpi(i);
+ const b=bk(i),invoice=$('#invd');if(!invoice)return;
+ // Remove the old static QR block so only the amount-specific UPI QR is shown.
+ invoice.querySelectorAll('img[alt="Payment QR"]').forEach(img=>img.closest('div')?.remove());
+ const amount=Math.max(0,Number(dueB(b))||0);if(amount<=0)return;
+ const box=document.createElement('div');box.style.cssText='margin-top:18px;padding:16px;border:1px solid #cdb27a;border-radius:14px;text-align:center;background:#fbf6e8;color:#2a2110';
+ box.innerHTML='<div style="font:600 22px Georgia;color:#4a3410">Pay exact balance · '+esc(K(amount))+'</div>'+dynamicUpiQr(amount,b.g,b.iv||('INV'+b.id))+'<small>Confirm the recipient and amount in your UPI app before approving payment.</small>';
+ invoice.appendChild(box);
+};
+const _restaurantReceiptBeforeDynamicUpi=openRestaurantReceipt;
+openRestaurantReceipt=function(s){
+ _restaurantReceiptBeforeDynamicUpi(s);
+ const root=$('#rest-receipt');if(!root)return;
+ const total=Math.max(0,Number(s.a)||0),box=document.createElement('div');
+ box.style.cssText='margin-top:14px;text-align:center;padding:12px;border-top:1px solid #cdb27a';
+ box.innerHTML='<div style="font:600 20px Georgia;color:#4a3410">Pay exact amount · '+esc(rk(total))+'</div>'+dynamicUpiQr(total,s.guest||'Walk-in',s.id||('RS'+Date.now()));
+ root.appendChild(box);
+};
+
 </script></body></html>
