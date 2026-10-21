@@ -8,6 +8,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.provider.MediaStore;
+import android.content.SharedPreferences;
+import android.provider.DocumentsContract;
 import android.os.Bundle;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
@@ -30,7 +32,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private static final int FILE_PICKER = 4182, CREATE_EXPORT_FILE = 4183;
+    private static final int FILE_PICKER = 4182, CREATE_EXPORT_FILE = 4183, BACKUP_FOLDER_PICKER = 4184;
+    private String pendingBackupRequestId;
+    private Uri backupTreeUri;
     private WebView webView;
     private ValueCallback<Uri[]> fileCallback;
     private String pendingExportBase64;
@@ -56,6 +60,9 @@ public class MainActivity extends Activity {
         });
         webView.addJavascriptInterface(new NativeBridge(), "AureliaNative");
         webView.loadUrl("file:///android_asset/index.html");
+        String savedTree=getSharedPreferences("aurelia_backup",MODE_PRIVATE).getString("tree_uri",null);
+        if(savedTree!=null){try{backupTreeUri=Uri.parse(savedTree);getContentResolver().takePersistableUriPermission(backupTreeUri,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);}catch(Exception ignored){}}
+        webView.postDelayed(()->{if(webView!=null)webView.evaluateJavascript("window.aureliaNativeDeviceBackupStatusResult&&window.aureliaNativeDeviceBackupStatusResult('status',"+(backupTreeUri!=null)+")",null);},700);
     }
 
     private class NativeBridge {
@@ -113,6 +120,35 @@ public class MainActivity extends Activity {
     private void send(String id,JSONObject payload) {
         String js="window.aureliaNativeOcrResult&&window.aureliaNativeOcrResult("+JSONObject.quote(id)+","+JSONObject.quote(payload.toString())+");";
         runOnUiThread(()->webView.evaluateJavascript(js,null));
+    }
+
+    private void chooseBackupFolder(String requestId) {
+        try {
+            Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION|Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            pendingBackupRequestId=requestId;
+            startActivityForResult(i,BACKUP_FOLDER_PICKER);
+        } catch(Exception e){Log.e("AureliaPMS","Folder picker failed",e);sendBackupFolderResult(requestId,false,"Could not open folder picker");}
+    }
+    private void sendBackupFolderResult(String requestId,boolean ok,String label) {
+        String js="window.aureliaNativeBackupFolderResult&&window.aureliaNativeBackupFolderResult("+JSONObject.quote(requestId)+","+ok+","+JSONObject.quote(label==null?"":label)+");";
+        if(webView!=null)webView.post(()->webView.evaluateJavascript(js,null));
+    }
+    private void saveDeviceBackup(String requestId,String name,String payload) {
+        if(backupTreeUri==null){sendBackupResult(requestId,false,"Choose a backup folder first");return;}
+        try {
+            Uri fileUri=DocumentsContract.createDocument(getContentResolver(),backupTreeUri,"application/json",name);
+            if(fileUri==null)throw new IllegalStateException("Could not create backup file");
+            try(OutputStream out=getContentResolver().openOutputStream(fileUri,"wt")) {
+                if(out==null)throw new IllegalStateException("Could not open backup file");
+                out.write(payload.getBytes(java.nio.charset.StandardCharsets.UTF_8));out.flush();
+            }
+            sendBackupResult(requestId,true,"");
+        } catch(Exception e){Log.e("AureliaPMS","Backup write failed",e);sendBackupResult(requestId,false,e.getMessage()==null?"Folder permission or storage error":e.getMessage());}
+    }
+    private void sendBackupResult(String requestId,boolean ok,String error) {
+        String js="window.aureliaNativeDeviceBackupResult&&window.aureliaNativeDeviceBackupResult("+JSONObject.quote(requestId)+","+ok+","+JSONObject.quote(error==null?"":error)+");";
+        if(webView!=null)webView.post(()->webView.evaluateJavascript(js,null));
     }
 
     private void shareImage(String name,String base64) {
@@ -181,6 +217,20 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int r,int c,Intent d) {
         super.onActivityResult(r,c,d);
         if(r==FILE_PICKER&&fileCallback!=null){fileCallback.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(c,d));fileCallback=null;}
+        else if(r==BACKUP_FOLDER_PICKER) {
+            String req=pendingBackupRequestId; pendingBackupRequestId=null;
+            if(c==RESULT_OK&&d!=null&&d.getData()!=null) {
+                try {
+                    Uri uri=d.getData();
+                    int flags=d.getFlags()&(Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                    getContentResolver().takePersistableUriPermission(uri,flags);
+                    backupTreeUri=uri;
+                    getSharedPreferences("aurelia_backup",MODE_PRIVATE).edit().putString("tree_uri",uri.toString()).apply();
+                    String label=uri.getLastPathSegment()==null?"Selected folder":uri.getLastPathSegment().replaceAll(".*:","");
+                    sendBackupFolderResult(req,true,label);
+                } catch(Exception e){Log.e("AureliaPMS","Persist folder permission failed",e);sendBackupFolderResult(req,false,"Could not keep folder permission");}
+            } else sendBackupFolderResult(req,false,"Folder selection cancelled");
+        }
         else if(r==CREATE_EXPORT_FILE) {
             String data=pendingExportBase64;pendingExportBase64=null;
             if(c==RESULT_OK&&d!=null&&d.getData()!=null&&data!=null) {
