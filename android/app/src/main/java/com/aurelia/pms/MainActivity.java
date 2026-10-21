@@ -109,20 +109,35 @@ public class MainActivity extends Activity {
     }
 
     private JSONObject parse(Text result) throws Exception {
-        String text=result.getText()==null?"":result.getText(), name="", id="";
-        String excluded="(?i).*(GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|DOB|ADDRESS|INDIA|INDIAN).*";
-        for(String line:text.split("\\R")) {
-            String t=line.trim();
-            if(name.isEmpty()&&t.matches("(?i)^(full\\s*name|name|surname|given names?)\\s*[:.-]?\\s*.+"))
-                name=t.replaceFirst("(?i)^(full\\s*name|name|surname|given names?)\\s*[:.-]?\\s*","").trim();
-            if(id.isEmpty()&&!t.matches(excluded)&&t.matches("(?i).*(?:[A-Z]{1,3}[- ]?\\d[A-Z0-9/-]{4,}|\\b\\d{6,}\\b).*")) {
-                Matcher m=Pattern.compile("(?i)[A-Z0-9/-]{5,}").matcher(t);
-                while(m.find()){String c=m.group();if(c.matches(".*\\d.*")){id=c;break;}}
+        String text=result.getText()==null?"":result.getText();
+        String name="",id="";
+        String excluded="(?i).*(GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|\\bDOB\\b|ADDRESS|INDIA|INDIAN|SIGNATURE|MALE|FEMALE|NRC CARD|REGISTRATION CARD).*";
+        String[] lines=text.split("\\R");
+        for(String line:lines) {
+            String t=line.trim().replaceAll("\\s+"," ");
+            if(name.isEmpty()&&!t.matches(excluded)) {
+                Matcher label=Pattern.compile("(?i)^(?:full\\s*name|name\\s*of\\s*holder|name|surname|family\\s*name|given\\s*names?|forenames?)\\s*[:#.-]?\\s*(.+)$").matcher(t);
+                if(label.find()) {
+                    String candidate=label.group(1).replaceAll("[^\\p{L} .’'-]"," ").replaceAll("\\s+"," ").trim();
+                    if(candidate.length()>=3&&!candidate.matches(".*\\d.*"))name=candidate;
+                }
+            }
+            if(id.isEmpty()&&!t.matches(excluded)&&!t.matches("(?i).*(DATE OF BIRTH|\\bDOB\\b|PHONE|MOBILE|POSTAL|PIN CODE|ADDRESS).*")) {
+                Matcher labeled=Pattern.compile("(?i)(?:NRC|ID|IDENTITY|DOCUMENT|PASSPORT|CARD)\\s*(?:NO|NUMBER|#)?\\s*[:#.-]?\\s*([A-Z0-9][A-Z0-9/-]{4,})").matcher(t);
+                if(labeled.find())id=labeled.group(1);
+                if(id.isEmpty()) {
+                    Matcher m=Pattern.compile("(?i)\\b(?:[A-Z]{1,3}[-/]?\\d[A-Z0-9/-]{4,}|\\d{6,14})\\b").matcher(t);
+                    if(m.find())id=m.group();
+                }
             }
         }
-        if(name.isEmpty()) for(String line:text.split("\\R")) {
-            String t=line.trim();
-            if(t.matches("[A-Z][A-Z ,.'-]{4,}")&&!t.matches(excluded)&&!t.matches(".*\\d.*")){name=t;break;}
+        if(name.isEmpty()) {
+            for(String line:lines) {
+                String t=line.trim().replaceAll("\\s+"," ");
+                if(t.length()<5||t.length()>60||t.matches(excluded)||t.matches(".*\\d.*"))continue;
+                if(t.matches("(?i)^[\\p{L}][\\p{L} .’'-]+$")&&t.split("\\s+").length>=2) {name=t;break;}
+                if(t.matches("[A-Z][A-Z ,.'-]{4,}")) {name=t;break;}
+            }
         }
         return new JSONObject().put("fullName",name).put("idNumber",id).put("text",text);
     }
