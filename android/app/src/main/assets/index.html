@@ -341,24 +341,50 @@ window.aureliaNativeDeviceBackupResult=(id,ok,err)=>bkDone(ok,err);window.aureli
 function restoreF(el){
  const f=el.files&&el.files[0];if(!f)return;
  f.text().then(t=>{
-  const raw=JSON.parse(t);
-  let o=raw&&raw.data?raw:raw&&raw.backup?{...raw,data:raw.backup}:raw;
-  let d=o.data||o.payload||o;
-  if(d&&d.data&&Array.isArray(d.data.rooms))d=d.data;
-  const rooms=d.rooms||d.roomList||d.room_list;
-  const bookings=d.b||d.bookings||d.stays||d.reservations;
-  if(!d||!Array.isArray(rooms)||!Array.isArray(bookings))throw new Error('JSON does not contain recognised room and booking arrays');
-  const normal={...d,rooms,b:bookings};
-  if(!Array.isArray(normal.g))normal.g=normal.guests||normal.guestList||[];
-  if(!Array.isArray(normal.t))normal.t=normal.tables||[];
-  if(!Array.isArray(normal.exp))normal.exp=normal.expenses||[];
-  if(!Array.isArray(normal.inv))normal.inv=normal.inventory||[];
-  if(!Array.isArray(normal.hist))normal.hist=normal.history||[0,0,0,0,0,0];
-  S.rst=normal;
-  ask('Restore this backup','Current data on this device is replaced by the backup from '+esc(o.hotel||o.hotelName||normal.set?.name||'your hotel')+'.','Restore','restoreGo()');
- }).catch(e=>{console.error('Backup JSON import:',e);toast('JSON import failed: '+(e.message||'unrecognised backup format'))}).finally(()=>{el.value=''});
+  const raw=JSON.parse(t),isSnapshot=!!(raw&&raw.data&&(Array.isArray(raw.data.rooms)||Array.isArray(raw.data.b))),d=isSnapshot?raw.data:raw;
+  const rooms=d.rooms||d.roomList||d.room_list,bookings=d.b||d.bookings||d.stays||d.reservations;
+  if(isSnapshot){
+   if(!Array.isArray(rooms)||!Array.isArray(bookings))throw new Error('Backup is missing its room or booking list.');
+   const normal={...d,rooms,b:bookings};
+   normal.g=Array.isArray(d.g)?d.g:(d.guests||d.guestList||[]);
+   normal.t=Array.isArray(d.t)?d.t:(d.tables||[]);
+   normal.exp=Array.isArray(d.exp)?d.exp:(d.expenses||[]);
+   normal.inv=Array.isArray(d.inv)?d.inv:(d.inventory||[]);
+   normal.hist=Array.isArray(d.hist)?d.hist:(d.history||[0,0,0,0,0,0]);
+   S.rst=normal;S.rstMode='snapshot';
+   ask('Restore this backup','Current app records will be replaced with the records in '+esc(raw.hotel||raw.hotelName||normal.set?.name||'this backup')+'.','Restore','restoreGo()');return;
+  }
+  if(Array.isArray(d.bookings)||Array.isArray(d.guests)){
+   S.rst={rooms:Array.isArray(rooms)?rooms:[],b:Array.isArray(bookings)?bookings:[],g:Array.isArray(d.guests)?d.guests:[],exp:Array.isArray(d.expenses)?d.expenses:[],inv:Array.isArray(d.inventory)?d.inventory:[],aud:Array.isArray(d.audit)?d.audit:[]};
+   S.rstMode='export';ask('Import JSON records','This is a data export, not a full backup. Valid guests and bookings will be added; existing records will be kept.','Import records','restoreGo()');return;
+  }
+  throw new Error('Unsupported JSON format. Choose an Aurelia backup or an export containing guests/bookings.');
+ }).catch(e=>{console.error('JSON import:',e);toast('JSON import failed: '+(e.message||'invalid file'))}).finally(()=>{el.value=''});
 }
-function restoreGo(){DK.forEach(k=>{if(S.rst[k]!==undefined)S[k]=S.rst[k]});persist();location.reload()}
+function normaliseImportedBooking(b){
+ if(!b||typeof b!=='object')return null;
+ const g=String(b.g??b.guest??b.guestName??b.name??'').trim(),room=String(b.room??b.roomNo??b.roomNumber??'').trim();
+ const offset=v=>{if(typeof v==='number'&&Number.isFinite(v))return v;const s=String(v??'').trim();if(!s)return null;if(/^[-+]?\d+$/.test(s))return Number(s);let d;const m=s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);if(m){let a=+m[1],bb=+m[2],y=+m[3];if(y<100)y+=2000;d=a>12?new Date(y,bb-1,a,12):bb>12?new Date(y,a-1,bb,12):new Date(y,bb-1,a,12)}else d=new Date(s);if(!d||isNaN(+d))return null;return Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)};
+ const inn=offset(b.in??b.checkIn??b.checkin??b.arrival??b.arrivalDate),out=offset(b.out??b.checkOut??b.checkout??b.departure??b.departureDate);
+ if(!g||!room||inn===null||out===null||out<=inn)return null;
+ return {...b,id:Number.isFinite(+b.id)&&+b.id>0?+b.id:++id,g,room,in:inn,out,st:['in','checkedin','checked-in'].includes(String(b.st??b.status??'').toLowerCase())?'in':'res',ch:Array.isArray(b.ch)?b.ch:[],p:Number(b.p)||0,pays:Array.isArray(b.pays)?b.pays:[],oc:Array.isArray(b.oc)?b.oc:[],veh:Array.isArray(b.veh)?b.veh:[],checkInTime:b.checkInTime||'14:00',checkOutTime:b.checkOutTime||'11:00'};
+}
+function restoreGo(){
+ const d=S.rst;if(!d){toast('No JSON records are ready to import');return}
+ if(S.rstMode==='export'){
+  const roomNames=new Set(S.rooms.map(r=>String(r.n??r.room??r.roomNo??'').trim()));
+  const guestNames=new Set(S.g.map(g=>String(g.n??g.name??'').trim().toLowerCase()));
+  let ga=0,ba=0,sk=0;
+  (d.g||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}const n=String(x.n??x.name??x.guestName??'').trim();if(!n){sk++;return}if(guestNames.has(n.toLowerCase()))return;S.g.push({...x,n,ph:x.ph??x.phone??x.mobile??'',em:x.em??x.email??'',idt:x.idt??x.idType??'',idn:x.idn??x.idNumber??''});guestNames.add(n.toLowerCase());ga++});
+  (d.b||[]).forEach(x=>{const b=normaliseImportedBooking(x);if(!b){sk++;return}if(!roomNames.has(String(b.room))){sk++;return}if(S.b.some(y=>String(y.g||'').toLowerCase()===b.g.toLowerCase()&&String(y.room)===b.room&&y.in===b.in&&y.out===b.out))return;S.b.push(b);ba++;id=Math.max(id,+b.id||0)});
+  S.rst=null;S.rstMode=null;persist();render();closeS();toast('JSON import: '+ga+' guests, '+ba+' bookings added; '+sk+' invalid rows skipped.');return;
+ }
+ DK.forEach(k=>{if(d[k]!==undefined)S[k]=d[k]});
+ ['rooms','b','g','t','exp','inv','aud'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
+ if(!Array.isArray(S.hist))S.hist=[0,0,0,0,0,0];
+ S.b=S.b.map(normaliseImportedBooking).filter(Boolean);id=Math.max(id,0,...S.b.map(b=>+b.id||0));
+ S.rst=null;S.rstMode=null;persist();location.reload();
+}
 const useMenu=m=>{Object.keys(MENU).forEach(k=>delete MENU[k]);Object.assign(MENU,m);S.menu=MENU};
 function persist(){try{const o={tab:S.tab,bk:S.bk};DK.forEach(k=>o[k]=S[k]);localStorage.setItem(SK,JSON.stringify(o))}catch(e){if(!S.qw){S.qw=1;toast('Device storage is full. Back up, then remove old items.')}}}
 function loadAll(){try{const o=JSON.parse(localStorage.getItem(SK)||'null');if(!o)return;[...DK,'bk','tab'].forEach(k=>{if(o[k]!==undefined)S[k]=o[k]});useMenu(S.menu);S.aud.forEach(a=>a.at=new Date(a.at));S.led.forEach(l=>l[3]=new Date(l[3]));id=Math.max(id,...S.b.map(b=>b.id))}catch(e){}}
@@ -501,29 +527,68 @@ function parseIdOcrText(raw){
  return {name,id:candidates[0]||'',text:lines.join('\n')};
 }
 async function ocrUploadedId(file,target){
- if(!file||!S.dr)return;toast('Reading ID photo…');
+ if(!file||!S.dr)return;
+ if(S.set.ocrEnabled===false){toast('OCR is disabled in Settings');return}
+ const requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+ window.__aureliaOcrTargets=window.__aureliaOcrTargets||{};
+ window.__aureliaOcrTargets[requestId]=target;
+ toast('Reading ID with PaddleOCR…');
  try{
-  if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId];}
+  const small=await resizeForOcr(file);
+  if(!window._paddleOcr){
+   try{
+    const mod=await import('https://esm.sh/@paddleocr/paddleocr-js@0.4.2');
+    const PaddleOCR=mod.PaddleOCR||mod.default?.PaddleOCR;
+    if(!PaddleOCR)throw new Error('PaddleOCR SDK did not expose PaddleOCR');
+    window._paddleOcr=await PaddleOCR.create({lang:'en',ocrVersion:'PP-OCRv5',ortOptions:{backend:'wasm',wasmPaths:'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/',numThreads:2,simd:true}});
+   }catch(e){console.warn('PaddleOCR init failed; using native/browser fallback',e)}
+  }
+  if(window._paddleOcr){
+   try{
+    const results=await window._paddleOcr.predict(small),result=Array.isArray(results)?results[0]:results;
+    const text=(result?.items||[]).map(x=>x.text||'').filter(Boolean).join('\n');
+    const d=parseIdOcrText(text);
+    if(text.trim()&&(d.name||d.id)){delete window.__aureliaOcrTargets[requestId];applyUploadedOcr(target,{...d,text});return}
+   }catch(e){console.warn('PaddleOCR prediction failed',e)}
+  }
+  if(window.AureliaNative&&nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)})){
+   toast('PaddleOCR unavailable or uncertain; Android OCR is processing the image…');return;
+  }
   if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
-  const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text));
- }catch(e){toast('OCR failed. Verify or enter ID details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180));}
+  const result=await window.Tesseract.recognize(small,'eng');
+  delete window.__aureliaOcrTargets[requestId];
+  applyUploadedOcr(target,{...parseIdOcrText(result.data.text||''),text:result.data.text||''});
+ }catch(e){
+  delete window.__aureliaOcrTargets[requestId];
+  console.error('ID OCR failed',e);toast('OCR failed. Keep the photo and enter the name and ID number manually.');
+  aud('ID OCR failed',String(e&&e.message||e).slice(0,180));
+ }
 }
 function applyUploadedOcr(target,d){
- const dr=S.dr;if(!dr)return;let destination=null;
+ const dr=S.dr;if(!dr){toast('Open the guest form again and retry OCR.');return}
+ let destination=null;
  if(target==='main')destination=dr.g;
  else if(String(target).startsWith('occ:'))destination=dr.oc[Number(String(target).split(':')[1])];
- if(!destination){toast('Matching guest form is no longer open.');return;}
- const name=String(d.name||d.fullName||'').trim(),id=String(d.id||d.idNumber||'').trim();
- if(name)destination.n=name;if(id)destination.idn=id;
+ if(!destination){toast('Matching guest form is no longer open.');return}
+ const parsed=parseIdOcrText(d.text||'');
+ const name=String(d.name||d.fullName||parsed.name||'').replace(/\s+/g,' ').trim();
+ const idNumber=String(d.id||d.idNumber||parsed.id||'').replace(/\s+/g,' ').trim();
+ if(name)destination.n=name;
+ if(idNumber)destination.idn=idNumber;
  dsheet();
  const panel=$('#pan');
  if(panel&&panel.classList.contains('show')){
-  if(target==='main'){if($('#d1'))$('#d1').value=destination.n||'';if($('#d5'))$('#d5').value=destination.idn||'';}
-  else{const row=$('.oc2',panel)[Number(String(target).split(':')[1])];if(row){const ni=row.querySelector('.a'),ii=row.querySelector('.d');if(ni)ni.value=destination.n||'';if(ii)ii.value=destination.idn||'';}}
+  if(target==='main'){
+   if($('#d1'))$('#d1').value=destination.n||'';
+   if($('#d5'))$('#d5').value=destination.idn||'';
+  }else{
+   const row=$$('.oc2',panel)[Number(String(target).split(':')[1])];
+   if(row){const ni=row.querySelector('.a'),ii=row.querySelector('.d');if(ni)ni.value=destination.n||'';if(ii)ii.value=destination.idn||''}
+  }
  }
  rdD();
- toast(name||id?'OCR filled the matching guest fields. Verify before saving.':'Text extracted but name/ID were not confidently identified.');
- if(d.text)aud('ID OCR','Text extracted; verify suggested guest fields');
+ if(name||idNumber){toast('OCR filled the matching name and ID fields. Verify before saving.');aud('ID OCR','Suggested fields filled; staff verification required')}
+ else toast('Text was read, but name or ID number was not confidently identified. Enter it manually.');
 }
 const _aureliaNativeOcrResultFixed=window.aureliaNativeOcrResult;
 window.aureliaNativeOcrResult=(requestId,payload)=>{
