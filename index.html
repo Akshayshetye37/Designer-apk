@@ -623,8 +623,19 @@ async function ocrUploadedId(file,target){
   }
   if(window._paddleOcr){
    try{
-    const results=await window._paddleOcr.predict(small),result=Array.isArray(results)?results[0]:results;
-    const text=(result?.items||[]).map(x=>x.text||'').filter(Boolean).join('\n');
+    const results=await window._paddleOcr.predict(small);
+    const found=[];
+    const collect=(node,depth=0)=>{
+     if(depth>8||node==null)return;
+     if(typeof node==='string'){const v=node.trim();if(v)found.push(v);return}
+     if(Array.isArray(node)){node.forEach(x=>collect(x,depth+1));return}
+     if(typeof node==='object'){
+      if(typeof node.text==='string'&&node.text.trim()){found.push(node.text.trim());return}
+      for(const k of ['items','texts','results','lines','rec_texts','text','data','ocr_result'])if(node[k]!==undefined)collect(node[k],depth+1);
+     }
+    };
+    collect(results);
+    const text=[...new Set(found)].join('\n');
     const d=parseIdOcrText(text);
     if(text.trim()&&(d.name||d.id)){delete window.__aureliaOcrTargets[requestId];applyUploadedOcr(target,{...d,text});return}
    }catch(e){console.warn('PaddleOCR prediction failed',e)}
