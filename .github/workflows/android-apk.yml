@@ -51,7 +51,7 @@ jobs:
           parser.feed(open("index.html", encoding="utf-8").read())
           if not parser.parts:
               raise SystemExit("No inline JavaScript found in index.html")
-          open("/tmp/aurelia-inline.js", "w", encoding="utf-8").write("\\n".join(parser.parts))
+          open("/tmp/aurelia-inline.js", "w", encoding="utf-8").write("\n".join(parser.parts))
           PY
           node --check /tmp/aurelia-inline.js
       - name: Build APK
