@@ -342,23 +342,402 @@ function restoreF(el){
  const f=el.files&&el.files[0];if(!f)return;
  f.text().then(t=>{
   const raw=JSON.parse(t);
-  let o=raw&&raw.data?raw:raw&&raw.backup?{...raw,data:raw.backup}:raw;
-  let d=o.data||o.payload||o;
-  if(d&&d.data&&Array.isArray(d.data.rooms))d=d.data;
+  const isSnapshot=!!(raw&&raw.data&&(Array.isArray(raw.data.rooms)||Array.isArray(raw.data.b)));
+  const d=isSnapshot?raw.data:raw;
+  const hasExport=Array.isArray(d.bookings)||Array.isArray(d.guests);
   const rooms=d.rooms||d.roomList||d.room_list;
   const bookings=d.b||d.bookings||d.stays||d.reservations;
-  if(!d||!Array.isArray(rooms)||!Array.isArray(bookings))throw new Error('JSON does not contain recognised room and booking arrays');
-  const normal={...d,rooms,b:bookings};
-  if(!Array.isArray(normal.g))normal.g=normal.guests||normal.guestList||[];
-  if(!Array.isArray(normal.t))normal.t=normal.tables||[];
-  if(!Array.isArray(normal.exp))normal.exp=normal.expenses||[];
-  if(!Array.isArray(normal.inv))normal.inv=normal.inventory||[];
-  if(!Array.isArray(normal.hist))normal.hist=normal.history||[0,0,0,0,0,0];
-  S.rst=normal;
-  ask('Restore this backup','Current data on this device is replaced by the backup from '+esc(o.hotel||o.hotelName||normal.set?.name||'your hotel')+'.','Restore','restoreGo()');
- }).catch(e=>{console.error('Backup JSON import:',e);toast('JSON import failed: '+(e.message||'unrecognised backup format'))}).finally(()=>{el.value=''});
+  if(isSnapshot){
+   if(!Array.isArray(rooms)||!Array.isArray(bookings))throw new Error('Backup is missing the room or booking list.');
+   const normal={...d,rooms,b:bookings};
+   normal.g=Array.isArray(d.g)?d.g:(d.guests||d.guestList||[]);
+   normal.t=Array.isArray(d.t)?d.t:(d.tables||[]);
+   normal.exp=Array.isArray(d.exp)?d.exp:(d.expenses||[]);
+   normal.inv=Array.isArray(d.inv)?d.inv:(d.inventory||[]);
+   normal.hist=Array.isArray(d.hist)?d.hist:(d.history||[0,0,0,0,0,0]);
+   S.rst=normal;S.rstMode='snapshot';
+   ask('Restore this backup','Current app records will be replaced with the records in '+esc(raw.hotel||raw.hotelName||normal.set?.name||'this backup')+'.','Restore','restoreGo()');
+   return;
+  }
+  if(hasExport){
+   S.rst={rooms:Array.isArray(rooms)?rooms:[],b:Array.isArray(bookings)?bookings:[],g:Array.isArray(d.guests)?d.guests:[],exp:Array.isArray(d.expenses)?d.expenses:[],inv:Array.isArray(d.inventory)?d.inventory:[],aud:Array.isArray(d.audit)?d.audit:[]};
+   S.rstMode='export';
+   ask('Import JSON records','This file is an export, not a full backup. Valid guests and bookings will be added; existing records will be kept.','Import records','restoreGo()');
+   return;
+  }
+  throw new Error('Unsupported JSON format. Choose an Aurelia backup or a JSON export containing guests/bookings.');
+ }).catch(e=>{console.error('JSON import:',e);toast('JSON import failed: '+(e.message||'invalid file'))}).finally(()=>{el.value=''});
 }
-function restoreGo(){DK.forEach(k=>{if(S.rst[k]!==undefined)S[k]=S.rst[k]});persist();location.reload()}
+function normaliseImportedBooking(b){
+ const g=String(b.g??b.guest??b.guestName??b.name??'').trim();
+ const room=String(b.room??b.roomNo??b.roomNumber??'').trim();
+ const dateOffset=v=>{if(typeof v==='number'&&Number.isFinite(v))return v;const s=String(v??'').trim();if(!s)return null;if(/^[-+]?\d+$/.test(s))return Number(s);const m=s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);let d;if(m){let a=+m[1],bb=+m[2],y=+m[3];if(y<100)y+=2000;d=a>12?new Date(y,bb-1,a,12):bb>12?new Date(y,a-1,bb,12):new Date(y,bb-1,a,12)}else d=new Date(s);if(!d||isNaN(+d))return null;return Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)};
+ const inn=dateOffset(b.in??b.checkIn??b.checkin??b.arrival??b.arrivalDate),out=dateOffset(b.out??b.checkOut??b.checkout??b.departure??b.departureDate);
+ if(!g||!room||inn===null||out===null||out<=inn)return null;
+ return {...b,id:Number.isFinite(+b.id)?+b.id:++id,g,room,in:inn,out,st:['in','checkedin','checked-in'].includes(String(b.st??b.status??'').toLowerCase())?'in':'res',ch:Array.isArray(b.ch)?b.ch:[],p:Number(b.p)||0,pays:Array.isArray(b.pays)?b.pays:[],oc:Array.isArray(b.oc)?b.oc:[],veh:Array.isArray(b.veh)?b.veh:[],checkInTime:b.checkInTime||'14:00',checkOutTime:b.checkOutTime||'11:00'};
+}
+const useMenu=m=>{Object.keys(MENU).forEach(k=>delete MENU[k]);Object.assign(MENU,m);S.menu=MENU};
+function persist(){try{const o={tab:S.tab,bk:S.bk};DK.forEach(k=>o[k]=S[k]);localStorage.setItem(SK,JSON.stringify(o))}catch(e){if(!S.qw){S.qw=1;toast('Device storage is full. Back up, then remove old items.')}}}
+function loadAll(){try{const o=JSON.parse(localStorage.getItem(SK)||'null');if(!o)return;[...DK,'bk','tab'].forEach(k=>{if(o[k]!==undefined)S[k]=o[k]});useMenu(S.menu);S.aud.forEach(a=>a.at=new Date(a.at));S.led.forEach(l=>l[3]=new Date(l[3]));id=Math.max(id,...S.b.map(b=>b.id))}catch(e){}}
+/* autopilot */
+function auto(){let ch=0;const A=S.au,now=Date.now(),h=new Date().getHours(),dn=day0();if(dn>S.day){const gap=dn-S.day;for(let k=0;k<Math.min(gap,7);k++){S.hist.push(k?0:S.today);S.hist.shift()}aud('Daily close','Takings '+K(S.today));S.today=0;S.day=dn;S.b.forEach(b=>{b.in-=gap;b.out-=gap});ch=1}
+S.rooms.forEach(r=>{if(r.s==='clean'){if(!r.ct){r.ct=now;ch=1}else if(A.release&&now-r.ct>A.hrs*6e4){r.s='ready';r.ct=0;aud('Auto: room released','Room '+r.n);ch=1}}else r.ct=0});
+if(A.noshow)S.b.filter(b=>b.st==='res'&&b.in<0).forEach(b=>{S.b.splice(S.b.indexOf(b),1);aud('Auto: no-show cancelled',b.g);ch=1});
+if(A.checkin&&h>=14)S.b.filter(b=>b.st==='res'&&b.in<=0&&!idMissing(gOf(b.g))&&rm(b.room)&&rm(b.room).s==='ready').forEach(b=>{cin(b.id);aud('Auto: checked in',b.g)});
+if(A.checkout&&h>=11)S.b.filter(b=>b.st==='in'&&b.out<=0&&dueB(b)<=0).forEach(b=>{outB(b.id);aud('Auto: checked out',b.g)});
+S.inv.forEach(x=>{if(x.q<=x.ro){if(!x.fl){x.fl=1;aud('Auto: reorder suggested',x.n+' · '+x.q+' left');ch=1}}else x.fl=0});
+if(A.backup)autoBackup();if(ch){if($('#sh').classList.contains('show'))persist();else render()}}
+/* home wrapper */
+const _h=V.home;V.home=()=>{let h=_h(),s=S.set,n=s.name.trim()||'Hotel',k=0;const hh=n.split(' ').map(w=>`<span style="white-space:nowrap">${[...w].map(c=>`<span style="--k:${k++}">${esc(c)}</span>`).join('')}</span>`).join(' ');h=h.replace(/<h1 class="foil"[\s\S]*?<\/h1>/,`<h1 class="foil" ${n.length>13?'style="font-size:clamp(32px,9.5vw,60px)"':''}>${hh}</h1>`).replace('Where the bush meets the finest of everything.',esc(s.tag)).replace(/data-p="K"/g,`data-p="${esc(s.cur)}"`);
+const dm=S.b.some(x=>x.demo)||S.rooms.some(x=>x.demo)||S.g.some(x=>x.demo),nt=[];if(dm)nt.push(`<div class="card row"><span>Sample data is loaded. Remove it when you are ready to start.</span><button class="btn sm" onclick="demoRm()">Remove demo data</button></div>`);if(!S.bk.folder)nt.push(`<div class="card row"><span>Choose a backup folder so nothing is lost.</span><button class="btn sm ghost" onclick="S.tab='more';S.sub='backup';render()">Choose</button></div>`);
+return h.replace('<div class="grid g4">',`<div class="grid" style="margin-bottom:0">${nt.join('')}</div><div class="grid g4">`)};
+/* ===== Aurelia PMS production hardening layer ===== */
+// Independent hotel / restaurant business ledgers.
+Object.assign(S,{restaurant:{name:'The Dining Room',phone:'',addr:'',tax:'',upi:'',cur:'K',gst:0,qr:''},tableGuests:{},tableRooms:{},quickGuest:{},payLinks:{}});
+const restCur=()=>S.restaurant.cur||S.set.cur||'K';
+const rk=n=>restCur()+Math.round(Number(n)||0).toLocaleString('en-US');
+function tableMeta(n){S.tableGuests=S.tableGuests||{};S.tableRooms=S.tableRooms||{};return {name:S.tableGuests[n]||'',room:S.tableRooms[n]||''}}
+function saveTableMeta(n){const name=$('#tg-name')?.value?.trim()||'',phone=$('#tg-phone')?.value?.trim()||'',room=$('#tg-room')?.value||'';S.tableGuests[n]={name,phone};S.tableRooms[n]=room;persist()}
+// Do not create phantom values or NaN rows if older local data is malformed.
+function cleanTableOrders(){S.t=(Array.isArray(S.t)?S.t:[]).filter(Boolean);S.t.forEach((t,i)=>{t.n=Number(t.n)||i+1;t.s=Math.max(1,Number(t.s)||2);t.o=(Array.isArray(t.o)?t.o:[]).filter(x=>Array.isArray(x)&&x.length>=2&&Number.isFinite(Number(x[1]))).map(x=>[String(x[0]),Number(x[1]),x[2]||'din']);});if(!S.t.length)S.t=[{n:1,s:2,o:[]}];S.tb=Math.max(1,Math.min(S.t.length,Number(S.tb)||1))}
+const oldDining=V.dining;
+V.dining=()=>{cleanTableOrders();const html=oldDining();const t=S.t[S.tb-1],m=tableMeta(t.n),rooms=S.b.filter(b=>b.st==='in');
+ const controls=`<div class="card" style="margin-top:14px"><div class="row"><h3>Guest &amp; billing details</h3><span class="tag ready">Restaurant ledger</span></div><div class="lab" style="margin:4px 0 10px">Table ${t.n} · ${t.s} seats. This bill stays separate from hotel folios unless you explicitly post it to an occupied room.</div><label class="fld"><span>Customer full name (printed on bill)</span><input id="tg-name" placeholder="Walk-in customer name" value="${esc(m.name||'')}"></label><label class="fld"><span>Customer phone number (printed on bill)</span><input id="tg-phone" type="tel" inputmode="tel" placeholder="Phone number" value="${esc(m.phone||'')}"></label><label class="fld"><span>Charge destination</span><select id="tg-room"><option value="">Restaurant / walk-in bill (separate)</option>${rooms.map(b=>`<option value="${b.room}" ${m.room===b.room?'selected':''}>Room ${b.room} · ${esc(b.g)}</option>`).join('')}</select></label><button class="btn ghost sm" onclick="saveTableMeta(${t.n});toast('Customer details saved for table ${t.n}')">Save bill details</button></div>`;
+ return html.replace('</div></div>`', '</div></div>`')+controls;
+};
+// Replace table settlement with clear separate restaurant billing, named guest/phone, invoice and PNG bill.
+function settle(){cleanTableOrders();const t=S.t[S.tb-1],a=t.o.reduce((s,x)=>s+(Number(x[1])||0),0),m=tableMeta(t.n);if(!(a>0)){toast('Add at least one item before settling');return}openS(`<h2 class="foil">Restaurant bill · Table ${t.n}</h2><div class="tot">${rk(a)}</div><div class="lab">This is a restaurant sale, not a hotel payment.</div><label class="fld"><span>Customer name</span><input id="st-name" value="${esc(m.name||'')}" placeholder="Customer name for printed bill"></label><label class="fld"><span>Customer phone</span><input id="st-phone" value="${esc(m.phone||'')}" type="tel" placeholder="Customer phone"></label>${mchips('sm')}<button class="btn" style="width:100%;margin-top:12px" onclick="settleGo()">Record restaurant payment</button>`)}
+function settleGo(){cleanTableOrders();const t=S.t[S.tb-1],a=t.o.reduce((s,x)=>s+(Number(x[1])||0),0);if(!(a>0)){toast('No items on this bill');return}const m=$('#sm .on')?.textContent||'Cash',name=$('#st-name')?.value?.trim()||tableMeta(t.n).name||'Walk-in customer',phone=$('#st-phone')?.value?.trim()||tableMeta(t.n).phone||'';S.tableGuests[t.n]={name,phone};S.sales.push({id:'RS-'+Date.now(),entity:'restaurant',t:t.n,guest:name,phone,items:t.o.map(x=>[x[0],Number(x[1])||0]),a,m,at:new Date().toISOString()});t.o=[];t.demo=0;S.today+=a;aud('Restaurant bill settled',name+' · Table '+t.n+' · '+rk(a)+' · '+m);closeS();render();openRestaurantReceipt(S.sales[S.sales.length-1]);toast(rk(a)+' recorded in restaurant ledger')}
+function addI(c,i){cleanTableOrders();const m=(MENU[c]||[])[i];if(!m){toast('That menu item is no longer available');return}const item=S.inv.find(x=>x.n.toLowerCase()===String(m[0]).toLowerCase());if(item&&item.q<1){toast(m[0]+' is out of stock');return}if(item){item.q--;S.led.unshift([item.n,-1,'restaurant-sale',new Date()]);if(item.q<=item.ro)toast(item.n+' is running low')}S.t[S.tb-1].o.push([m[0],Number(m[1])||0,'din']);render();window.scrollTo({top:document.body.scrollHeight,behavior:'smooth'})}
+const _diningForStock=V.dining;V.dining=()=>{let out=_diningForStock();const sell=S.inv.filter(x=>x.sellable&&Number(x.price)>0&&Number(x.q)>0);if(sell.length){const block=`<div class="card" style="margin-top:14px"><h3>Retail stock for sale</h3><div class="lab">Sold items reduce inventory automatically.</div>${sell.map(x=>`<button class="mi" onclick="sellStockItem('${esc(x.n).replace(/'/g,'\\\'')}',${Number(x.price)})"><div><b>${esc(x.n)}</b><div class="lab">${x.q} in stock</div></div><span>${K(x.price)}</span></button>`).join('')}</div>`;out+=block}return out};
+function sellStockItem(name,price){cleanTableOrders();const x=S.inv.find(y=>y.n===name);if(!x||x.q<1){toast('This item is out of stock');return}x.q--;S.led.unshift([x.n,-1,'retail-sale',new Date()]);S.t[S.tb-1].o.push([x.n,Number(price)||0,'retail']);aud('Retail item added to restaurant bill',x.n+' · '+K(price));if(x.q<=x.ro)toast(x.n+' is running low');render()}
+function toRoom(){cleanTableOrders();const t=S.t[S.tb-1],g=inh();if(!g.length){toast('There are no checked-in hotel guests');return}openS(`<h2 class="foil">Post restaurant bill to room folio</h2><div class="lab">Only this action transfers the restaurant charges to the selected hotel guest folio.</div><div class="list">${g.map(b=>`<div class="item"><div class="f"><b>${esc(b.g)}</b><small>Room ${esc(b.room)} · current balance ${K(dueB(b))}</small></div><button class="btn sm" onclick="chg(${b.id})">Post bill</button></div>`).join('')}</div><button class="btn ghost sm" style="width:100%;margin-top:10px" onclick="closeS()">Keep as restaurant bill</button>`)}
+function chg(i){cleanTableOrders();const t=S.t[S.tb-1],b=bk(i);if(!b||b.st!=='in'){toast('Choose a currently checked-in room');return}if(!t.o.length){toast('No restaurant items to post');return}t.o.forEach(x=>b.ch.push(['Restaurant · '+x[0],Number(x[1])||0,'din']));const meta=tableMeta(t.n);S.sales.push({id:'RP-'+Date.now(),entity:'restaurant',t:t.n,guest:meta.name||b.g,phone:meta.phone||'',room:b.room,postedToHotel:true,items:t.o.map(x=>[x[0],Number(x[1])||0]),a:t.o.reduce((a,x)=>a+(Number(x[1])||0),0),m:'Room folio',at:new Date().toISOString()});t.o=[];t.demo=0;aud('Restaurant sale posted to hotel folio',b.g+' · Room '+b.room);closeS();render();toast('Restaurant charge added to room '+b.room)}
+function openRestaurantReceipt(s){const r=S.restaurant||{},items=s.items||[],total=Number(s.a)||0;const invoice=`<div class="invoice" id="rest-receipt"><div class="ih"><div><h3>${esc(r.name||'The Dining Room')}</h3><small>${esc(r.addr||'')}<br>${esc(r.phone||'')} · ${esc(r.tax||'')}</small></div><div class="im"><b>Restaurant Bill</b><span>${esc(s.id||'RS-'+Date.now())}</span><br><small>${new Date(s.at||Date.now()).toLocaleString('en-IN')}</small></div></div><div style="margin-top:14px"><small>Billed to</small><div style="font:600 21px var(--serif)">${esc(s.guest||'Walk-in customer')}</div><small>${s.phone?'Phone: '+esc(s.phone)+' · ':''}Table ${esc(s.t||'—')}${s.room?' · Room '+esc(s.room):''}</small></div><table class="it"><tr><th>Description</th><th>Qty</th><th>Amount</th></tr>${items.map(x=>`<tr><td>${esc(x[0])}</td><td>1</td><td>${rk(x[1])}</td></tr>`).join('')}</table><div class="itot"><div class="g"><span>Total</span><span>${rk(total)}</span></div><div><span>Payment method</span><span>${esc(s.m||'Room folio')}</span></div></div><div style="margin-top:22px;text-align:center"><small>Thank you. We look forward to serving you again.</small></div></div><div class="row noprint" style="margin-top:12px;gap:8px"><button class="btn sm ghost" onclick="downloadBillPng('rest-receipt','restaurant-'+('${esc(s.id||'bill')}')+'.png')">Download PNG bill</button><button class="btn sm" onclick="nat({type:'printInvoice',html:$('#rest-receipt').outerHTML})||window.print()">Print / PDF</button></div>`;openS(invoice)}
+async function downloadBillPng(elementId,fileName){const el=$('#'+elementId);if(!el){toast('Bill preview not found');return}try{const clone=el.cloneNode(true);clone.style.cssText+=';position:fixed;left:-10000px;top:0;width:680px;max-width:none;background:#fbf6e8;color:#2a2110;padding:28px;font-family:Georgia,serif;border:1px solid #cdb27a';document.body.appendChild(clone);const rect=clone.getBoundingClientRect(),scale=2,svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${rect.width*scale}" height="${rect.height*scale}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${rect.width}px;height:${rect.height}px;transform:scale(${scale});transform-origin:top left">${clone.innerHTML}</div></foreignObject></svg>`;const blob=new Blob([svg],{type:'image/svg+xml;charset=utf-8'}),url=URL.createObjectURL(blob),img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url});const c=document.createElement('canvas');c.width=rect.width*scale;c.height=rect.height*scale;c.getContext('2d').fillStyle='#fbf6e8';c.getContext('2d').fillRect(0,0,c.width,c.height);c.getContext('2d').drawImage(img,0,0);URL.revokeObjectURL(url);document.body.removeChild(clone);const png=await new Promise(resolve=>c.toBlob(resolve,'image/png'));const a=document.createElement('a');a.href=URL.createObjectURL(png);a.download=fileName||'invoice.png';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);toast('PNG bill downloaded')}catch(e){toast('PNG export failed on this browser; use Print / PDF instead')}}
+// Premium room invoice with proper balance and clear property/business identity. Add PNG and payment QR controls.
+const oldInv=inv;
+inv=function(i){oldInv(i);const b=bk(i),s=S.set;const host=$('#pan');if(!host)return;const invoice=$('#invd');if(!invoice)return;const d=dueB(b),qr=s.qr||'';const payBlock=d>0?`<div style="margin-top:18px;padding:16px;border:1px solid #cdb27a;border-radius:14px;text-align:center"><div style="font:600 22px Georgia;color:#4a3410">Pay balance · ${K(d)}</div>${qr?`<img src="${qr}" alt="Payment QR" style="display:block;width:min(240px,100%);height:auto;image-rendering:auto;margin:14px auto;border:8px solid #fff;background:#fff;border-radius:6px">`:'<div style="padding:20px;color:#7a6a45">Add a QR image in Settings for static payment instructions. Dynamic amount QR requires a configured payment provider.</div>'}<small>Balance shown is ${K(d)}. Verify the receiving account and amount before paying.</small></div>`:'';invoice.insertAdjacentHTML('beforeend',payBlock);const actions=host.querySelector('.noprint');if(actions){actions.insertAdjacentHTML('afterbegin',`<button class="btn sm ghost" onclick="downloadBillPng('invd','${esc(b.iv||'invoice')}.png')">Download PNG</button>`);actions.insertAdjacentHTML('beforeend',`<button class="btn sm ghost" onclick="shareInvoiceImage(${i})">Share image</button>`)}};
+async function shareInvoiceImage(i){const b=bk(i);if(!b)return;const el=$('#invd');if(!el){toast('Invoice preview not found');return}let clone;try{clone=el.cloneNode(true);clone.style.cssText+=';position:fixed;left:-10000px;top:0;width:680px;max-width:none;background:#fbf6e8;color:#2a2110;padding:28px;font-family:Georgia,serif;border:1px solid #cdb27a';document.body.appendChild(clone);const rect=clone.getBoundingClientRect(),scale=2,svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${rect.width*scale}" height="${rect.height*scale}"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml" style="width:${rect.width}px;height:${rect.height}px;transform:scale(${scale});transform-origin:top left">${clone.innerHTML}</div></foreignObject></svg>`;const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml;charset=utf-8'})),img=new Image();await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=url});const canvas=document.createElement('canvas');canvas.width=rect.width*scale;canvas.height=rect.height*scale;canvas.getContext('2d').fillStyle='#fbf6e8';canvas.getContext('2d').fillRect(0,0,canvas.width,canvas.height);canvas.getContext('2d').drawImage(img,0,0);URL.revokeObjectURL(url);const data=canvas.toDataURL('image/png').split(',')[1];if(window.AureliaNative&&nat({type:'shareImage',name:(b.iv||'invoice')+'.png',data})){toast('Choose WhatsApp in the Android share sheet');return}await downloadBillPng('invd',(b.iv||'invoice')+'.png');toast('Invoice PNG downloaded. Open WhatsApp and attach it.')}catch(e){console.error(e);toast('PNG sharing failed. Try Download PNG instead.')}finally{if(clone&&clone.parentNode)clone.remove()}}
+// Dashboard alerts combine housekeeping releases and low-stock inventory, without mixing the two entities' sales.
+const previousHome=V.home;
+V.home=()=>{let h=previousHome();const alerts=[];const low=S.inv.filter(x=>Number(x.q)<=Number(x.ro));const hk=S.rooms.filter(r=>r.s==='clean');if(low.length)alerts.push(`<div class="card"><div class="row"><h3>Low inventory</h3><span class="tag out">${low.length} item${low.length===1?'':'s'}</span></div>${low.map(x=>`<div class="ln"><span>${esc(x.n)}</span><b>${Number(x.q)||0} left · reorder at ${Number(x.ro)||0}</b></div>`).join('')}<button class="btn sm ghost" onclick="S.tab='more';S.sub='inv';render()">Manage stock</button></div>`);if(hk.length)alerts.push(`<div class="card"><div class="row"><h3>Housekeeping required</h3><span class="tag clean">${hk.length} room${hk.length===1?'':'s'}</span></div>${hk.map(r=>`<div class="ln"><span>Room ${esc(r.n)}</span><span>${esc(r.t)}</span></div>`).join('')}<button class="btn sm ghost" onclick="S.tab='more';S.sub='hk';render()">Open housekeeping</button></div>`);return h.replace('<div class="grid g4">',`${alerts.length?`<div class="grid g2" style="margin-bottom:14px">${alerts.join('')}</div>`:''}<div class="grid g4">`)};
+// Hotel and restaurant identity controls are distinct and persisted independently.
+const oldSettings=SUB.set;
+SUB.set=()=>oldSettings()+`<div class="card" style="margin-top:14px"><h2>OCR controls</h2><div class="lab">Turn guest ID text recognition on or off. Recognition results must be checked against the original document.</div><label class="fld"><span>Enable OCR</span><select onchange="S.set.ocrEnabled=this.value==='true';persist();render()"><option value="true" ${S.set.ocrEnabled!==false?'selected':''}>Enabled</option><option value="false" ${S.set.ocrEnabled===false?'selected':''}>Disabled</option></select></label><div class="lab">Primary engine: PaddleOCR.js PP-OCRv5 running locally in the browser after its SDK and models load. First use requires internet access and may take time. If PaddleOCR fails, Android ML Kit or Tesseract.js is used as a fallback.</div></div><div class="card" style="margin-top:14px"><h2>Separate restaurant identity</h2><div class="lab">Restaurant invoices and walk-in takings remain independent. Charges are linked to a hotel room only by the explicit “Post bill to room folio” action.</div>${[['rName','Restaurant name'],['rPhone','Restaurant phone'],['rAddr','Restaurant address'],['rTax','Restaurant tax registration'],['rUpi','Restaurant UPI / payment ID'],['rCur','Restaurant currency symbol'],['rGst','Restaurant tax rate (%)']].map(([k,l])=>`<label class="fld"><span>${l}</span><input id="${k}" value="${esc(({rName:S.restaurant.name,rPhone:S.restaurant.phone,rAddr:S.restaurant.addr,rTax:S.restaurant.tax,rUpi:S.restaurant.upi,rCur:S.restaurant.cur,rGst:S.restaurant.gst})[k]??'')}"></label>`).join('')}<label class="fld"><span>Restaurant payment QR (static fallback)</span><input type="file" accept="image/*" onchange="setRestaurantImage(this)"></label>${S.restaurant.qr?`<img src="${S.restaurant.qr}" style="width:180px;max-width:100%;background:#fff;padding:6px;border-radius:8px" alt="Restaurant QR">`:''}<button class="btn" style="width:100%;margin-top:10px" onclick="saveRestaurantSettings()">Save restaurant identity</button></div>`;
+function saveRestaurantSettings(){const r=S.restaurant;r.name=$('#rName').value.trim()||'Restaurant';r.phone=$('#rPhone').value.trim();r.addr=$('#rAddr').value.trim();r.tax=$('#rTax').value.trim();r.upi=$('#rUpi').value.trim();r.cur=$('#rCur').value.trim()||r.cur;r.gst=Math.max(0,Number($('#rGst').value)||0);aud('Restaurant settings','Separate restaurant identity saved');persist();render();toast('Restaurant identity saved')}
+function setRestaurantImage(el){shrink(el.files[0],u=>{S.restaurant.qr=u;persist();render()})}
+// OCR pipeline: Android bridge when present; browser Tesseract.js fallback is user-triggered and suggests fields for review.
+function ocrPanel(){if(S.set.ocrEnabled===false)return `<div class="card" style="margin-top:12px"><h3>ID text recognition is disabled</h3><div class="lab">Enable OCR in Settings to recognise guest ID documents.</div></div>`;return `<div class="card" style="margin-top:12px"><h3>ID text recognition</h3><div class="lab">Capture or select a clear, cropped ID image. OCR proposes a name and ID number; staff must verify both before saving.</div><label class="fld"><span>ID image</span><input id="ocr-file" type="file" accept="image/*" capture="environment"></label><button class="btn sm" onclick="runIdOcr()">Recognise name &amp; ID number</button><div id="ocr-result" class="lab" style="margin-top:10px"></div></div>`}
+async function runIdOcr(){
+ if(S.set.ocrEnabled===false){toast('OCR is disabled in Settings');return}
+ const f=$('#ocr-file')?.files?.[0];if(!f){toast('Choose or capture the ID photo first');return}
+ const out=$('#ocr-result');out.textContent='Starting PaddleOCR…';
+ const renderResult=(text,engine)=>{text=String(text||'').replace(/\\r/g,'');const lines=text.split('\\n').map(x=>x.trim()).filter(Boolean);const idLine=lines.find(x=>/([A-Z]{1,3}[\\t -]?\\b[0-9][A-Z0-9/-]{4,}\\b)|(\\b[0-9]{6,}\\b)/i.test(x))||'';const nameLine=lines.find(x=>/^(full\\s*name|name|surname|given names?)\\b/i.test(x))||lines.find(x=>/^[A-Z][A-Z ,.'-]{5,}$/.test(x)&&!/(GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|ADDRESS)/i.test(x))||'';const name=nameLine.replace(/^(full\\s*name|name|surname|given names?)\\b[\\t :.-]*/i,'').trim();const id=(idLine.match(/[A-Z0-9/-]{5,}/ig)||[]).sort((a,b)=>b.length-a.length)[0]||'';out.innerHTML='<div class="ln"><span>OCR engine</span><b>'+esc(engine)+'</b></div><div class="ln"><span>Proposed full name</span><b>'+esc(name||'Not confident')+'</b></div><div class="ln"><span>Proposed ID number</span><b>'+esc(id||'Not confident')+'</b></div><div style="margin-top:8px;white-space:pre-wrap">'+esc(text.slice(0,1600))+'</div><div class="row" style="margin-top:8px"><button class="btn sm" onclick="applyOcrFields(\x27'+esc(name).replace(/\x27/g,'’')+'\x27,\x27'+esc(id).replace(/\x27/g,'’')+'\x27)">Use suggested fields</button></div><div class="lab" style="margin-top:8px">OCR is an assistive guess, not verification. Check every field against the original ID before saving.</div>';aud('ID OCR','PaddleOCR/local fallback recognition; staff review required')};
+ try{
+  if(!window._paddleOcr){
+   out.textContent='Loading PaddleOCR engine and models. First run may take time and needs internet…';
+   const mod=await import('https://esm.sh/@paddleocr/paddleocr-js@0.4.2');
+   const PaddleOCR=mod.PaddleOCR||mod.default?.PaddleOCR;
+   if(!PaddleOCR)throw new Error('PaddleOCR SDK did not expose PaddleOCR');
+   window._paddleOcr=await PaddleOCR.create({lang:'en',ocrVersion:'PP-OCRv5',ortOptions:{backend:'wasm',wasmPaths:'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/',numThreads:2,simd:true}});
+  }
+  out.textContent='Running PaddleOCR…';
+  const results=await window._paddleOcr.predict(f),result=Array.isArray(results)?results[0]:results;
+  const text=(result?.items||[]).map(x=>x.text||'').filter(Boolean).join('\\n');
+  if(!text.trim())throw new Error('PaddleOCR returned no readable text');
+  renderResult(text,'PaddleOCR PP-OCRv5');
+ }catch(paddleError){
+  console.warn('PaddleOCR failed; trying device/browser fallback',paddleError);
+  try{
+   if(window.AureliaNative){
+    out.textContent='PaddleOCR unavailable; trying Android text recognition…';
+    const small=await resizeForOcr(f),requestId='ocr'+Date.now();
+    window._pendingOcr=window._pendingOcr||{};window._pendingOcr[requestId]=out;
+    const ok=nat({type:'recognizeId',requestId,name:f.name,mime:f.type,data:await fileBase64(small)});
+    if(ok){out.textContent='PaddleOCR could not initialize. Android fallback started; results will appear here.';return}
+   }
+   if(!window.Tesseract){out.textContent='PaddleOCR could not initialize; loading browser fallback…';await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js')}
+   const result=await window.Tesseract.recognize(f,'eng');renderResult(result.data.text||'','Tesseract.js fallback');
+  }catch(e){out.textContent='OCR failed. PaddleOCR error: '+String(paddleError&&paddleError.message||paddleError)+'; fallback error: '+String(e&&e.message||e)+'. Check internet/model access and try a sharper image.'}
+ }
+}
+function resizeForOcr(file){return new Promise(resolve=>{const im=new Image(),url=URL.createObjectURL(file);im.onload=()=>{const scale=Math.min(1,1800/Math.max(im.naturalWidth,im.naturalHeight)),c=document.createElement('canvas');c.width=Math.max(1,Math.round(im.naturalWidth*scale));c.height=Math.max(1,Math.round(im.naturalHeight*scale));c.getContext('2d').drawImage(im,0,0,c.width,c.height);URL.revokeObjectURL(url);c.toBlob(b=>resolve(b||file),'image/jpeg',.82)};im.onerror=()=>{URL.revokeObjectURL(url);resolve(file)};im.src=url})}
+function fileBase64(f){return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result).split(',')[1]||'');r.onerror=reject;r.readAsDataURL(f)})}
+function loadScript(src){return new Promise((resolve,reject)=>{const s=document.createElement('script');s.src=src;s.onload=resolve;s.onerror=()=>reject(new Error('Could not load OCR engine. Connect to the internet and retry.'));document.head.appendChild(s)})}
+const oldDsheet=dsheet;
+dsheet=function(){oldDsheet();const panel=$('#pan');if(panel&&!panel.querySelector('#ocr-file'))panel.insertAdjacentHTML('beforeend',ocrPanel())};
+// Explicit guest-linking action prevents orphan profiles and requires room/stay choice to be intentional.
+const oldDsave=dsave;
+dsave=function(){const draft=S.dr;if(draft?.k==='guest'){rdD();const name=draft.g.n.trim();if(!name){toast('Enter the guest name');return}const existing=S.b.filter(b=>b.g===name&&(b.st==='in'||b.st==='res'));const hasPhoto=!!draft.g.img; if(!hasPhoto||!draft.g.idn.trim()){openS(`<h2 class="foil">Guest saved without complete ID?</h2><p class="lab">A guest profile without an ID cannot be checked in. Complete the ID photo and number first, or save the profile as a draft.</p><button class="btn ghost" onclick="closeS()">Return to form</button>`);return}const prev= S.g.findIndex(x=>x.n.toLowerCase()===name.toLowerCase());if(prev<0&&existing.length===0){openS(`<h2 class="foil">Link guest to a stay</h2><p class="lab">A guest profile alone does not reserve a room. Choose one action so this guest is useful in the PMS.</p><div class="grid"><button class="btn" onclick="closeS();dsaveProfileOnly()">Save profile only</button><button class="btn" onclick="closeS();resvForGuest('${esc(name).replace(/'/g,'\\\'')}')">Create room reservation</button></div>`);return}}oldDsave()};
+function dsaveProfileOnly(){rdD();const d=S.dr,g=d.g;g.n=g.n.trim();if(!g.n||!g.idn.trim()||!g.img){toast('Add the guest name, ID number and ID image');dsheet();return}const rec={...g,occ:d.oc,veh:d.vh};const ix=d.gi;if(ix==null)S.g.push(rec);else S.g[ix]=rec;aud('Guest profile saved','Not linked to a booking');closeS();render();toast('Guest profile saved; no room was booked')}
+function resvForGuest(name){const ix=S.g.findIndex(g=>g.n.toLowerCase()===name.toLowerCase());S.dr=newDraft('res');if(ix>=0){const g=S.g[ix];S.dr.g={n:g.n,ph:g.ph,em:g.em,idt:g.idt,idn:g.idn,img:g.img};S.dr.oc=JSON.parse(JSON.stringify(g.occ||[]));S.dr.vh=JSON.parse(JSON.stringify(g.veh||[]))}dsheet()}
+// Native OCR callback receives extracted fields; keep every value editable for staff verification.
+window.aureliaNativeOcrResult=(requestId,payload)=>{try{const d=typeof payload==='string'?JSON.parse(payload):payload;const el=$('#ocr-result');if(el)el.innerHTML=`<div class="ln"><span>Proposed full name</span><b>${esc(d.fullName||d.name||'Not detected')}</b></div><div class="ln"><span>Proposed ID number</span><b>${esc(d.idNumber||d.id||'Not detected')}</b></div><div style="white-space:pre-wrap">${esc(d.text||'')}</div><div class="row" style="margin-top:8px"><button class="btn sm" onclick="applyOcrFields('${esc(d.fullName||d.name||'').replace(/'/g,'’')}','${esc(d.idNumber||d.id||'').replace(/'/g,'’')}')">Use suggested fields</button></div><div class="lab">Check the original ID before saving.</div>`}catch(e){toast('Could not parse OCR result')}};
+function applyOcrFields(name,id){if($('#d1')&&name)$('#d1').value=name;if($('#d5')&&id)$('#d5').value=id;toast('Suggested fields filled; verify before saving')}
+// More menu has explicit restaurant, dining bills, guests, and pending payment list.
+TL.unshift(['rest','Restaurant business','Separate billing, identity & sales','POS'],['guest-export','Guest / Room Export','PDF with ID photos & room booking','Guests']);
+SUB['guest-export']=()=>hd('Guest / Room Export')+`<div class="card"><h3>Export one booking</h3><div class="lab">A single guest and room record bundle. Includes stay details, all guest ID images, folio lines and payment totals. Store exports securely.</div><button class="btn" style="margin-top:12px" onclick="guestBookingExport()">Choose booking &amp; export</button></div>`;
+function guestBookingExport(){openS(`<h2 class="foil">Export guest & room file</h2><div class="lab">Select one room booking. The export includes guest details, occupants, ID image data, folio lines, payment records, invoice totals and room details in a private PDF bundle.</div><label class="fld"><span>Booking</span><select id="export-booking">${S.b.map(b=>`<option value="${b.id}">${esc(b.g)} · Room ${esc(b.room)} · ${fd(b.in)}–${fd(b.out)} · ${b.st}</option>`).join('')}</select></label><div class="lab">ID photos are sensitive personal data. Store the exported file securely and share only with an authorised recipient.</div><button class="btn" style="width:100%" onclick="exportGuestBooking()">Generate guest PDF</button><button class="btn ghost" style="width:100%;margin-top:8px" onclick="exportGuestBundleJson()">Download guest file (JSON with photos)</button>`)}
+function exportGuestBundleJson(){const id=Number($('#export-booking')?.value),b=bk(id);if(!b){toast('Choose a booking first');return}const g=gOf(b.g),payload={schema:'aurelia-guest-booking-v1',createdAt:new Date().toISOString(),hotel:S.set,booking:b,room:rm(b.room)||null,guest:g||null,folio:{lines:lines(b),total:tt(b),paid:paid(b),balance:dueB(b)},restaurantPosts:S.sales.filter(x=>x.postedToHotel&&x.room===b.room&&x.guest===b.g),note:'Contains ID photo data. Handle as confidential personal information.'};downloadBlob(JSON.stringify(payload,null,2),`guest-${safeFile(b.g)}-room-${safeFile(b.room)}.json`,'application/json');toast('Guest file downloaded')}
+function safeFile(x){return String(x||'file').replace(/[^a-z0-9_-]+/gi,'-').slice(0,60)}
+function downloadBlob(data,name,type){const blob=new Blob([data],{type}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),2000)}
+function exportGuestBooking(){const id=Number($('#export-booking')?.value),b=bk(id);if(!b){toast('Choose a booking first');return}const g=gOf(b.g),r=rm(b.room)||{},holder=document.createElement('div');holder.className='invoice';holder.style.cssText='background:#fbf6e8;color:#2a2110;padding:26px;font-family:Georgia,serif';const img=(label,src)=>src?`<div style="display:inline-block;margin:8px 10px 8px 0;text-align:center"><div style="font-size:12px;color:#7a6a45">${esc(label)}</div><img src="${src}" style="max-width:260px;max-height:220px;object-fit:contain;border:1px solid #cdb27a;padding:4px;background:#fff"/></div>`:`<div style="display:inline-block;margin:8px 10px 8px 0;color:#7a6a45">${esc(label)}: no image on file</div>`;holder.innerHTML=`<h2 style="letter-spacing:.06em;color:#4a3410">${esc(S.set.name)} · Guest & Room Record</h2><p style="color:#7a6a45">Generated ${new Date().toLocaleString()} · Booking #${b.id}</p><h3>Stay details</h3><p><b>Guest:</b> ${esc(b.g)}<br/><b>Room:</b> ${esc(b.room)} (${esc(r.t||'')})<br/><b>Dates:</b> ${fd(b.in)} to ${fd(b.out)}<br/><b>Scheduled check-in:</b> ${esc(b.scheduledCheckIn?new Date(b.scheduledCheckIn).toLocaleString():((b.checkInTime||'14:00')+' (default)'))}<br/><b>Scheduled check-out:</b> ${esc(b.scheduledCheckOut?new Date(b.scheduledCheckOut).toLocaleString():((b.checkOutTime||'11:00')+' (default)'))}<br/><b>Actual check-in:</b> ${esc(b.actualCheckInAt?new Date(b.actualCheckInAt).toLocaleString():'Not checked in')}<br/><b>Actual check-out:</b> ${esc(b.actualCheckOutAt?new Date(b.actualCheckOutAt).toLocaleString():'Not checked out')}<br/><b>Status:</b> ${esc(b.st)}<br/><b>Phone:</b> ${esc(g?.ph||'')}<br/><b>Email:</b> ${esc(g?.em||'')}<br/><b>ID type:</b> ${esc(g?.idt||'')}<br/><b>ID number:</b> ${esc(g?.idn||'')}</p><h3>Primary guest ID image</h3>${img('Primary guest ID',g?.img)}<h3>Occupants</h3>${(g?.occ||[]).map((o,i)=>`<div style="border-top:1px solid #cdb27a;padding:10px 0"><b>${esc(o.n||'Occupant '+(i+1))}</b><br/>Relation: ${esc(o.rel||'')} · ID type: ${esc(o.idt||'')} · ID number: ${esc(o.idn||'')}<br/>${img('Occupant '+(i+1)+' ID',o.img)}</div>`).join('')||'<p>No additional occupants recorded.</p>'}<h3>Charges & payments</h3><table class="it"><tr><th>Description</th><th>Amount</th></tr>${lines(b).map(x=>`<tr><td>${esc(x[0])}</td><td>${K(x[1])}</td></tr>`).join('')}${b.dc?`<tr><td>Discount</td><td>−${K(b.dc)}</td></tr>`:''}${(b.pays||[]).map(p=>`<tr><td>Payment · ${esc(p.m)} · ${esc(p.r||'')} · ${esc(p.at||'')}</td><td>−${K(p.a)}</td></tr>`).join('')}<tr><td><b>Total / balance due</b></td><td><b>${K(tt(b))} / ${K(dueB(b))}</b></td></tr></table><p style="color:#7a6a45;font-size:12px">Confidential: identity documents and contact details. Do not disclose without a lawful and authorised purpose.</p>`;openS(`<h2 class="foil">Guest & room export ready</h2><div class="lab">Use the browser print dialog and choose “Save as PDF”. ID images appear in the document if saved on this device.</div><div id="guest-pdf-preview"></div><div class="row noprint" style="margin-top:12px"><button class="btn" onclick="printGuestPreview()">Print / Save as PDF</button><button class="btn ghost" onclick="exportGuestBundleJson()">JSON + photos</button></div>`);$('#guest-pdf-preview').appendChild(holder);window._guestPdfHtml=holder.outerHTML}
+function printGuestPreview(){const node=$('#guest-pdf-preview');if(!node){toast('Preview missing');return}const html=node.innerHTML;if(window.AureliaNative&&nat({type:'printInvoice',html:html})){closeS();toast('Android print dialog opened. Choose Save as PDF to download.');return}const w=window.open('','_blank');if(!w){toast('Printing is blocked. Use Download guest file (JSON) or allow pop-ups.');return}w.document.write(`<!doctype html><html><head><title>Guest & Room Record</title><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:14px Arial;margin:22px;color:#222}h2,h3{color:#4a3410}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #cdb27a;padding:8px;text-align:left}img{max-width:250px;max-height:220px;object-fit:contain}@media print{button{display:none}}</style></head><body>${html}</body></html>`);w.document.close();w.focus();setTimeout(()=>w.print(),400)}
+SUB.rest=()=>hd('Restaurant business')+`<div class="grid g2"><div class="card"><h3>${esc(S.restaurant.name||'The Dining Room')}</h3><div class="lab">Independent revenue and invoices</div><div class="tot">${rk(S.sales.filter(x=>!x.postedToHotel).reduce((a,x)=>a+(Number(x.a)||0),0))}</div><div class="lab">Walk-in / restaurant takings</div></div><div class="card"><h3>Pending hotel folios</h3><div class="tot">${K(S.b.filter(b=>b.st==='in').reduce((a,b)=>a+Math.max(0,dueB(b)),0))}</div><div class="lab">Hotel balances only</div></div></div><div class="card" style="margin-top:14px"><h3>Restaurant bills</h3>${S.sales.map(x=>`<div class="item"><div class="f"><b>${esc(x.guest||'Walk-in')} · ${rk(x.a)}</b><small>${esc(x.id||'')} · Table ${esc(x.t||'—')} · ${esc(x.m||'Room folio')}</small></div>${x.room?`<span class="tag occ">Room ${esc(x.room)}</span>`:'<span class="tag ready">Separate</span>'}<button class="btn sm ghost" onclick="openRestaurantReceipt(S.sales.find(q=>q.id==='${esc(x.id)}'))">Bill</button></div>`).join('')||'<div class="empty">No restaurant bills yet.</div>'}</div><div class="card" style="margin-top:14px"><h3>Payments awaiting review</h3>${S.sig.filter(x=>x.st!=='matched').map(x=>`<div class="item"><div class="f"><b>${rk(x.amt)} · ${esc(x.app)}</b><small>${esc(x.payer||'Unknown')} · ${esc(x.ref||'No reference')}</small></div><button class="btn sm ghost" onclick="sigM('${esc(x.id)}')">Match</button></div>`).join('')||'<div class="empty">No pending payment signals.</div>'}</div>`;
+// Include new separated entities in backup and persistence.
+DK.push('restaurant','tableGuests','tableRooms');
+
+/* start */
+loadAll();if(!window.AureliaNative)S.bk.folder=false;S.restaurant=Object.assign({name:'The Dining Room',phone:'',addr:'',tax:'',upi:'',cur:S.set.cur||'K',gst:0,qr:''},S.restaurant||{});if(!S.restaurant.cur)S.restaurant.cur=S.set.cur||'K';S.tableGuests=S.tableGuests||{};S.tableRooms=S.tableRooms||{};cleanTableOrders();useMenu(S.menu);syncT();
+const _r3=render;render=function(){syncT();_r3();brand();persist()};
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)auto()});setInterval(auto,60000);
+nat({type:'deviceBackupStatus',requestId:'bs'+Date.now()});
+render();auto();
+
+
+/* OCR each ID photo upload; native ML Kit in APK and Tesseract.js fallback in browser. */
+window.__aureliaOcrTargets=window.__aureliaOcrTargets||{};
+function parseIdOcrText(raw){const lines=String(raw||'').replace(/\r/g,'').split('\n').map(x=>x.trim()).filter(Boolean);const idLine=lines.find(x=>/([A-Z]{1,3}[\t -]?\b[0-9][A-Z0-9/-]{4,}\b)|(\b[0-9]{6,}\b)/i.test(x))||'';const nameLine=lines.find(x=>/^(name|surname|given names?)\b/i.test(x))||lines.find(x=>/^[A-Z][A-Z ,.'-]{5,}$/.test(x)&&!/(GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICENCE|LICENSE|DATE OF BIRTH)/i.test(x))||'';return {name:nameLine.replace(/^(name|surname|given names?)\b[\t :.-]*/i,'').trim(),id:(idLine.match(/[A-Z0-9/-]{5,}/ig)||[]).sort((a,b)=>b.length-a.length)[0]||'',text:lines.join('\n')}}
+async function ocrUploadedId(file,target){if(!file)return;toast('Reading ID photo…');try{if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,7);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId]}if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text))}catch(e){toast('ID photo saved; OCR failed. Enter details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180))}}
+function applyUploadedOcr(target,d){const dr=S.dr;if(!dr)return;let changed=false;if(target==='main'){if(d.name){dr.g.n=d.name;changed=true}if(d.id){dr.g.idn=d.id;changed=true}}else if(target.startsWith('occ:')){const o=dr.oc[Number(target.split(':')[1])];if(o){if(d.name){o.n=d.name;changed=true}if(d.id){o.idn=d.id;changed=true}}}if(changed){aud('ID OCR','Suggested details from uploaded ID; staff verification required');dsheet();toast('OCR suggestions filled — verify against original')}else toast('ID photo saved; OCR found no confident name/number. Enter manually.')}
+const _aureliaNativeOcrResult=window.aureliaNativeOcrResult;
+window.aureliaNativeOcrResult=(requestId,payload)=>{const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload;applyUploadedOcr(target,{name:d.fullName||d.name||'',id:d.idNumber||d.id||'',text:d.text||''})}catch(e){toast('OCR result could not be read; enter details manually')}return}if(_aureliaNativeOcrResult)_aureliaNativeOcrResult(requestId,payload)};
+
+/* Targeted reliability fixes: ID OCR field routing, Android-safe exports, dynamic UPI QR. */
+function parseIdOcrText(raw){
+ const text=String(raw||'').replace(/\r/g,'');
+ const lines=text.split('\n').map(v=>v.trim()).filter(Boolean);
+ const excluded=/GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|DOB|MALE|FEMALE|ADDRESS|INDIA|INDIAN/i;
+ const labelLine=lines.find(v=>/^(?:full\s*name|name|surname|given\s*names?)\s*[:.-]?\s*\S/i.test(v));
+ let name=labelLine?labelLine.replace(/^(?:full\s*name|name|surname|given\s*names?)\s*[:.-]?\s*/i,'').trim():'';
+ if(!name){const candidate=lines.find(v=>/^[A-Z][A-Z ,.'-]{4,}$/.test(v)&&!excluded.test(v)&&! /\d/.test(v));if(candidate)name=candidate.trim();}
+ const candidates=[];
+ for(const line of lines){if(/DOB|DATE OF BIRTH|PHONE|MOBILE|PIN|POSTAL|ADDRESS/i.test(line))continue;for(const value of (line.match(/[A-Z0-9][A-Z0-9/-]{4,}/ig)||[])){const v=value.replace(/[^A-Z0-9/-]/ig,'');if(/\d/.test(v)&&v.length>=5&&!excluded.test(v))candidates.push(v);}}
+ candidates.sort((a,b)=>b.length-a.length);
+ return {name,id:candidates[0]||'',text:lines.join('\n')};
+}
+async function ocrUploadedId(file,target){
+ if(!file||!S.dr)return;toast('Reading ID photo…');
+ try{
+  if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId];}
+  if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
+  const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text));
+ }catch(e){toast('OCR failed. Verify or enter ID details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180));}
+}
+function applyUploadedOcr(target,d){
+ const dr=S.dr;if(!dr)return;let destination=null;
+ if(target==='main')destination=dr.g;
+ else if(String(target).startsWith('occ:'))destination=dr.oc[Number(String(target).split(':')[1])];
+ if(!destination){toast('Matching guest form is no longer open.');return;}
+ const name=String(d.name||d.fullName||'').trim(),id=String(d.id||d.idNumber||'').trim();
+ if(name)destination.n=name;if(id)destination.idn=id;
+ dsheet();
+ const panel=$('#pan');
+ if(panel&&panel.classList.contains('show')){
+  if(target==='main'){if($('#d1'))$('#d1').value=destination.n||'';if($('#d5'))$('#d5').value=destination.idn||'';}
+  else{const row=$('.oc2',panel)[Number(String(target).split(':')[1])];if(row){const ni=row.querySelector('.a'),ii=row.querySelector('.d');if(ni)ni.value=destination.n||'';if(ii)ii.value=destination.idn||'';}}
+ }
+ rdD();
+ toast(name||id?'OCR filled the matching guest fields. Verify before saving.':'Text extracted but name/ID were not confidently identified.');
+ if(d.text)aud('ID OCR','Text extracted; verify suggested guest fields');
+}
+const _aureliaNativeOcrResultFixed=window.aureliaNativeOcrResult;
+window.aureliaNativeOcrResult=(requestId,payload)=>{
+ const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];
+ if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload,parsed=parseIdOcrText(d.text||'');applyUploadedOcr(target,{name:d.fullName||d.name||parsed.name,id:d.idNumber||d.id||parsed.id,text:d.text||''});}catch(e){toast('Could not read OCR result. Enter details manually.');}return;}
+ if(_aureliaNativeOcrResultFixed)_aureliaNativeOcrResultFixed(requestId,payload);
+};
+/* Android WebView-safe PNG export using html2canvas, then native Save As dialog. */
+async function downloadBillPng(elementId,fileName){
+ const el=$('#'+elementId);if(!el){toast('Bill preview not found');return;}
+ try{
+  if(!window.html2canvas)await loadScript('https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js');
+  const canvas=await window.html2canvas(el,{scale:2,backgroundColor:'#fbf6e8',useCORS:true,logging:false,windowWidth:Math.max(el.scrollWidth,680)});
+  const blob=await new Promise((resolve,reject)=>canvas.toBlob(b=>b?resolve(b):reject(new Error('PNG encoding failed')),'image/png'));
+  const filename=fileName||'invoice.png';
+  if(window.AureliaNative&&nat({type:'saveFile',requestId:'png-'+Date.now(),name:filename,mime:'image/png',data:await fileBase64(blob)})){toast('Choose where to save the PNG');return;}
+  const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;a.rel='noopener';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);toast('PNG bill exported');
+ }catch(e){console.error(e);toast('PNG export failed. Use Print / Save PDF.');}
+}
+/* Dynamic UPI intent QR; amount is generated from the current balance/restaurant bill. */
+function upiIntentUri(amount,guest,reference){
+ const receiver=String(S.set?.upi||S.restaurant?.upi||'').trim();if(!receiver||!receiver.includes('@'))return '';
+ const params=new URLSearchParams({pa:receiver,pn:String(S.set?.name||S.restaurant?.name||'Aurelia PMS'),am:(Math.max(0,Number(amount)||0)).toFixed(2),cu:'INR',tn:'Invoice payment '+String(guest||''),tr:String(reference||('AUR'+Date.now()))});
+ return 'upi://pay?'+params.toString();
+}
+function dynamicUpiQr(amount,guest,reference){
+ const uri=upiIntentUri(amount,guest,reference);if(!uri)return '<div style="padding:12px;color:#7a6a45">Set a valid UPI ID in Settings to generate an amount-specific QR.</div>';
+ const qr='https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=8&data='+encodeURIComponent(uri);
+ return '<img alt="UPI QR for exact amount" src="'+qr+'" style="display:block;width:min(240px,100%);height:auto;margin:12px auto;border:8px solid #fff;background:#fff;border-radius:6px"><div style="font:12px Arial;color:#7a6a45;overflow-wrap:anywhere">UPI ID: '+esc(String(S.set?.upi||S.restaurant?.upi||''))+'</div>';
+}
+const _invBeforeDynamicUpi=inv;
+inv=function(i){
+ _invBeforeDynamicUpi(i);
+ const b=bk(i),invoice=$('#invd');if(!invoice)return;
+ // Remove the old static QR block so only the amount-specific UPI QR is shown.
+ invoice.querySelectorAll('img[alt="Payment QR"]').forEach(img=>img.closest('div')?.remove());
+ const amount=Math.max(0,Number(dueB(b))||0);if(amount<=0)return;
+ const box=document.createElement('div');box.style.cssText='margin-top:18px;padding:16px;border:1px solid #cdb27a;border-radius:14px;text-align:center;background:#fbf6e8;color:#2a2110';
+ box.innerHTML='<div style="font:600 22px Georgia;color:#4a3410">Pay exact balance · '+esc(K(amount))+'</div>'+dynamicUpiQr(amount,b.g,b.iv||('INV'+b.id))+'<small>Confirm the recipient and amount in your UPI app before approving payment.</small>';
+ invoice.appendChild(box);
+};
+const _restaurantReceiptBeforeDynamicUpi=openRestaurantReceipt;
+openRestaurantReceipt=function(s){
+ _restaurantReceiptBeforeDynamicUpi(s);
+ const root=$('#rest-receipt');if(!root)return;
+ const total=Math.max(0,Number(s.a)||0),box=document.createElement('div');
+ box.style.cssText='margin-top:14px;text-align:center;padding:12px;border-top:1px solid #cdb27a';
+ box.innerHTML='<div style="font:600 20px Georgia;color:#4a3410">Pay exact amount · '+esc(rk(total))+'</div>'+dynamicUpiQr(total,s.guest||'Walk-in',s.id||('RS'+Date.now()));
+ root.appendChild(box);
+};
+
+
+
+/* Focused Android reliability patch: toast placement, share intents, WhatsApp, XLSX import and back navigation. */
+(function(){
+ const style=document.createElement('style');
+ style.textContent='#toast{top:auto!important;bottom:calc(104px + env(safe-area-inset-bottom,0px))!important;max-width:calc(100% - 32px);white-space:normal;text-align:center;border-radius:18px;transform:translate(-50%,24px)!important;opacity:0;pointer-events:none}#toast.show{transform:translate(-50%,0)!important;opacity:1}';
+ document.head.appendChild(style);
+})();
+function waS(i){
+ const b=bk(i),g=gOf(b.g),phone=String(g&&g.ph||'').replace(/\D/g,'');
+ const message=itx(b);
+ const url=phone?'https://wa.me/'+phone+'?text='+encodeURIComponent(message):'https://wa.me/?text='+encodeURIComponent(message);
+ if(window.AureliaNative&&nat({type:'openUrl',url}))return;
+ window.location.href=url;
+}
+async function shr(i){
+ const b=bk(i),message=itx(b);
+ try{
+  if(window.AureliaNative&&nat({type:'shareText',title:'Aurelia PMS invoice',text:message}))return;
+  if(navigator.share){await navigator.share({title:'Aurelia PMS invoice',text:message});return;}
+  if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(message);toast('Invoice summary copied. Paste it into a sharing app.');return;}
+  openS('<h3>Share invoice summary</h3><textarea id="sharetext" style="width:100%;min-height:140px;margin:12px 0;padding:12px">'+esc(message)+'</textarea><button class="btn" onclick="navigator.clipboard?.writeText($(\'#sharetext\').value);toast(\'Copied if clipboard is available\')">Copy summary</button><button class="btn ghost" onclick="closeS()">Close</button>');
+ }catch(e){if(e&&e.name!=='AbortError')toast('Unable to open sharing options.');}
+}
+function importXlsxFile(input){
+ const file=input.files&&input.files[0];if(!file)return;
+ const run=async()=>{
+  if(!window.XLSX)await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+  const wb=XLSX.read(await file.arrayBuffer(),{type:'array',cellDates:true});
+  let rows=[],sheetName='';
+  for(const sn of wb.SheetNames){const candidate=XLSX.utils.sheet_to_json(wb.Sheets[sn],{defval:'',raw:true});if(candidate.length){rows=candidate;sheetName=sn;break}}
+  if(!rows.length)throw new Error('No data rows found in any worksheet.');
+  const norm=s=>String(s??'').toLowerCase().normalize('NFD').replace(/[\\u0300-\\u036f]/g,'').replace(/[^a-z0-9]/g,'');
+  const aliases={
+   guest:['guest','guestname','fullname','name','customer','customername','primaryguest','clientname','occupant'],
+   room:['room','roomno','roomnumber','roomname','suite','suiteno','unit','accommodation'],
+   arrival:['checkin','checkindate','arrival','arrivaldate','fromdate','startdate','datein','indate'],
+   departure:['checkout','checkoutdate','departure','departuredate','todate','enddate','dateout','outdate'],
+   checkInTime:['checkintime','arrival time','arrival time','timein','checkintimein'],
+   checkOutTime:['checkouttime','departuretime','timeout','checkouttimeout'],
+   phone:['phone','phonenumber','mobile','contact','contactnumber','guestphone'],
+   email:['email','emailaddress','guestemail'],
+   idType:['idtype','documenttype','identitytype','doctype'],
+   idNumber:['idnumber','documentnumber','identitynumber','idno','documentid'],
+   status:['status','bookingstatus','staystatus']
+  };
+  const headers=Object.keys(rows[0]),headerMap={};
+  for(const field of Object.keys(aliases)){
+   const set=aliases[field].map(norm);
+   headerMap[field]=headers.find(h=>set.includes(norm(h)))||'';
+  }
+  const get=(row,field)=>headerMap[field]?row[headerMap[field]]:'';
+  const dateOffset=v=>{
+   if(v instanceof Date)return Math.round((new Date(v.getFullYear(),v.getMonth(),v.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000);
+   if(typeof v==='number'&&XLSX.SSF.parse_date_code){const d=XLSX.SSF.parse_date_code(v);if(d)return Math.round((new Date(d.y,d.m-1,d.d,12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)}
+   const s=String(v??'').trim();if(!s)return null;
+   let m=s.match(/^(\\d{1,2})[./-](\\d{1,2})[./-](\\d{2,4})$/);
+   if(m){let a=+m[1],b=+m[2],y=+m[3];if(y<100)y+=2000;let d=a>12?new Date(y,b-1,a,12):b>12?new Date(y,a-1,b,12):new Date(y,b-1,a,12);if(!isNaN(+d))return Math.round((d-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)}
+   const d=new Date(s);return isNaN(+d)?null:Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000);
+  };
+  const timeVal=(v,fallback)=>{if(v instanceof Date)return String(v.getHours()).padStart(2,'0')+':'+String(v.getMinutes()).padStart(2,'0');if(typeof v==='number'&&v>=0&&v<1){let m=Math.round(v*1440);return String(Math.floor(m/60)%24).padStart(2,'0')+':'+String(m%60).padStart(2,'0')}const s=String(v??'').trim();if(!s)return fallback;const m=s.match(/(\\d{1,2})[:.](\\d{2})\\s*(am|pm)?/i);if(!m)return fallback;let h=+m[1],mi=+m[2];if(m[3]){if(m[3].toLowerCase()==='pm'&&h<12)h+=12;if(m[3].toLowerCase()==='am'&&h===12)h=0}return h<24&&mi<60?String(h).padStart(2,'0')+':'+String(mi).padStart(2,'0'):fallback};
+  const candidates=rows.map(row=>{
+   const guest=String(get(row,'guest')??'').trim(),room=String(get(row,'room')??'').trim();
+   const inn=dateOffset(get(row,'arrival')),out=dateOffset(get(row,'departure'));
+   return {g:guest,room,inn,out,checkInTime:timeVal(get(row,'checkInTime'),'14:00'),checkOutTime:timeVal(get(row,'checkOutTime'),'11:00'),phone:String(get(row,'phone')??'').trim(),email:String(get(row,'email')??'').trim(),idType:String(get(row,'idType')??'').trim(),idNumber:String(get(row,'idNumber')??'').trim(),st:String(get(row,'status')??'').trim().toLowerCase()};
+  }).filter(x=>x.g&&x.room&&x.inn!==null&&x.out!==null&&x.out>x.inn);
+  if(!headerMap.guest||!headerMap.room||!headerMap.arrival||!headerMap.departure) {
+   const mapSummary=Object.entries(headerMap).filter(([k,v])=>v).map(([k,v])=>k+' ← '+v).join('\\n')||'No known headers matched.';
+   openS('<h3>Excel header mapping</h3><p class="lab">Sheet: '+esc(sheetName)+'. I could not identify all required reservation columns. Recognised mappings:</p><pre style="white-space:pre-wrap">'+esc(mapSummary)+'</pre><p class="lab">Expected headers include Guest Name, Room No., Check-in Date and Check-out Date. Rename your columns or upload a sheet with these fields.</p><button class="btn ghost" onclick="closeS()">Close</button>');
+   return;
+  }
+  if(!candidates.length)throw new Error('Headers were recognised, but no valid rows had a guest, room and check-out date after check-in.');
+  window._aureliaPendingXlsx=candidates;
+  const mapping=Object.entries(headerMap).filter(([k,v])=>v).map(([k,v])=>'<div class="ln"><span>'+esc(k)+'</span><b>'+esc(v)+'</b></div>').join('');
+  const preview=candidates.slice(0,8).map((x,n)=>'<tr><td>'+(n+1)+'</td><td>'+esc(x.g)+'</td><td>'+esc(x.room)+'</td><td>'+esc(String(x.inn))+' → '+esc(String(x.out))+'</td><td>'+esc(x.checkInTime+' / '+x.checkOutTime)+'</td></tr>').join('');
+  openS('<h3>Confirm Excel import</h3><p class="lab">Worksheet: '+esc(sheetName)+' · '+candidates.length+' valid reservation rows. Recognised headers are mapped below. Date values are converted to app dates; check-in/out times use spreadsheet values or 14:00 / 11:00 defaults when absent.</p>'+mapping+'<div style="overflow:auto;max-height:34vh"><table><thead><tr><th>#</th><th>Guest</th><th>Room</th><th>Dates (offset)</th><th>In / out time</th></tr></thead><tbody>'+preview+'</tbody></table></div><button class="btn" onclick="commitXlsxImport(window._aureliaPendingXlsx||[])">Import reservations</button> <button class="btn ghost" onclick="window._aureliaPendingXlsx=null;closeS()">Cancel</button>');
+ };
+ run().catch(e=>{console.error(e);toast('Excel import failed: '+(e.message||'Check the file format or internet connection.'))}).finally(()=>{input.value=''});
+}
+function commitXlsxImport(rows){
+ let added=0,skipped=0;
+ rows.forEach(x=>{
+  const room=rm(x.room);if(!room){skipped++;return}
+  if(S.b.some(b=>String(b.g||'').toLowerCase()===x.g.toLowerCase()&&String(b.room)===x.room&&b.in===x.inn&&b.out===x.out)){skipped++;return}
+  const b={id:++id,g:x.g,room:x.room,in:x.inn,out:x.out,st:x.st==='in'||(x.inn<=0&&x.out>0)?'in':'res',ch:[],p:0,pays:[],oc:[],veh:[],checkInTime:x.checkInTime||'14:00',checkOutTime:x.checkOutTime||'11:00',scheduledCheckIn:ymd(x.inn)+'T'+(x.checkInTime||'14:00'),scheduledCheckOut:ymd(x.out)+'T'+(x.checkOutTime||'11:00')};
+  if(x.phone)b.ph=x.phone;if(x.email)b.email=x.email;if(x.idType)b.idt=x.idType;if(x.idNumber)b.idn=x.idNumber;
+  S.b.push(b);added++;
+ });
+ window._aureliaPendingXlsx=null;persist();render();closeS();toast('Excel import: '+added+' added, '+skipped+' skipped (room must exist).');
+}
+const _ioBeforeXlsx=SUB.io;
+if(_ioBeforeXlsx){
+ SUB.io=()=>_ioBeforeXlsx().replace(/<input([^>]*type=["']file["'][^>]*>)/gi,'<input$1').replace(/Import JSON/gi,'Import JSON');
+}
+window.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#sh')?.classList.contains('show'))closeS();});
+
+/* Add a real spreadsheet picker to the existing Import/Export screen. */
+const _aureliaIoOriginal=SUB.io;
+SUB.io=function(){
+ const html=_aureliaIoOriginal();
+ return html.replace('<p class="lab" style="margin-top:14px">Encrypted backup', '<div class="card" style="margin-top:14px"><h3>Import reservations from Excel</h3><p class="lab">Select an .xlsx or .xls file with Guest, Room, Check-in and Check-out columns. Existing reservations are kept.</p><label class="btn sm" style="display:inline-block">Choose Excel file<input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none" onchange="importXlsxFile(this)"></label></div><p class="lab" style="margin-top:14px">Encrypted backup');
+};
+
+
+/* Aurelia PMS polished UI pass — presentation only; existing workflows and data logic remain unchanged. */
+(function(){
+ const css=`
+ :root{--gold:#e8cf91;--gold2:#b18b48;--ln:rgba(232,207,145,.28)}
+ html{scroll-behavior:smooth;overscroll-behavior-y:contain}
+ body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+ .app{padding-left:clamp(14px,4vw,24px);padding-right:clamp(14px,4vw,24px)}
+ .card{box-shadow:0 12px 28px rgba(0,0,0,.12);backdrop-filter:blur(8px)}
+ .card:active{border-color:rgba(232,207,145,.48)}
+ .btn{letter-spacing:.01em;min-height:42px}
+ .btn:focus-visible,.chip:focus-visible,.dock button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+ .fld input,.fld select,.fld textarea,.oc2 input,.oc2 select{min-height:46px;border-color:rgba(232,207,145,.25);transition:border-color .18s,box-shadow .18s,background .18s}
+ .fld input:focus,.fld select:focus,.fld textarea:focus,.oc2 input:focus,.oc2 select:focus{background:rgba(255,255,255,.075);border-color:var(--gold);box-shadow:0 0 0 3px rgba(232,207,145,.12)}
+ .pan{max-height:calc(92dvh - env(safe-area-inset-top,0px));padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(232,207,145,.35) transparent}
+ .sheet.show .scrim{animation:fade .22s ease-out}
+ .sheet.show .pan{animation:up .28s cubic-bezier(.2,.8,.2,1)}
+ #toast{z-index:100;max-width:calc(100vw - 28px);width:max-content;box-shadow:0 10px 30px rgba(0,0,0,.3);font-size:14px;line-height:1.4}
+ .dock{padding:5px;background:rgba(6,20,14,.88);border-color:rgba(232,207,145,.3);box-shadow:0 14px 40px rgba(0,0,0,.4)}
+ .dock button{min-height:48px}
+ .item{min-width:0}.item .f{overflow-wrap:anywhere}
+ .chips{scroll-snap-type:x proximity}.chip{scroll-snap-align:start}
+ .invoice{overflow-wrap:anywhere}
+ @media(max-width:420px){.app{padding-top:10px}.hero{height:350px;border-radius:24px}.card{padding:15px}.pan{border-radius:24px 24px 0 0;padding-left:16px;padding-right:16px}.btn{padding:11px 15px}.dock{bottom:calc(8px + env(safe-area-inset-bottom,0px))}}
+ @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.sheet.show .pan,.sheet.show .scrim{animation:none}}
+ `;
+ const style=document.createElement('style');style.id='aurelia-polish-pass';style.textContent=css;document.head.appendChild(style);
+})();
+
+</script></body></html>function restoreGo(){
+ const d=S.rst;if(!d){toast('No JSON records are ready to import');return}
+ if(S.rstMode==='export'){
+  const validRooms=new Set(S.rooms.map(r=>String(r.n??r.room??r.roomNo??'').trim()));
+  const guestByName=new Set(S.g.map(g=>String(g.n||g.name||'').trim().toLowerCase()));
+  let guestsAdded=0,bookingsAdded=0,skipped=0;
+  (d.g||[]).forEach(x=>{const n=String(x.n??x.name??x.guestName??'').trim();if(!n){skipped++;return}if(guestByName.has(n.toLowerCase()))return;S.g.push({...x,n,ph:x.ph??x.phone??x.mobile??'',em:x.em??x.email??'',idt:x.idt??x.idType??'',idn:x.idn??x.idNumber??''});guestByName.add(n.toLowerCase());guestsAdded++});
+  (d.b||[]).forEach(x=>{const b=normaliseImportedBooking(x);if(!b){skipped++;return}if(!validRooms.has(String(b.room))){skipped++;return}if(S.b.some(y=>String(y.g||'').toLowerCase()===b.g.toLowerCase()&&String(y.room)===b.room&&y.in===b.in&&y.out===b.out))return;S.b.push(b);bookingsAdded++;id=Math.max(id,+b.id||0)});
+  S.rst=null;S.rstMode=null;persist();render();closeS();toast('JSON import: '+guestsAdded+' guests, '+bookingsAdded+' bookings added; '+skipped+' invalid rows skipped.');return;
+ }
+ DK.forEach(k=>{if(d[k]!==undefined)S[k]=d[k]});
+ if(!Array.isArray(S.rooms))S.rooms=[];if(!Array.isArray(S.b))S.b=[];if(!Array.isArray(S.g))S.g=[];if(!Array.isArray(S.t))S.t=[];if(!Array.isArray(S.exp))S.exp=[];if(!Array.isArray(S.inv))S.inv=[];if(!Array.isArray(S.aud))S.aud=[];if(!Array.isArray(S.hist))S.hist=[0,0,0,0,0,0];
+ S.b=S.b.map(normaliseImportedBooking).filter(Boolean);id=Math.max(id,0,...S.b.map(b=>+b.id||0));S.rst=null;S.rstMode=null;persist();location.reload();
+}
 const useMenu=m=>{Object.keys(MENU).forEach(k=>delete MENU[k]);Object.assign(MENU,m);S.menu=MENU};
 function persist(){try{const o={tab:S.tab,bk:S.bk};DK.forEach(k=>o[k]=S[k]);localStorage.setItem(SK,JSON.stringify(o))}catch(e){if(!S.qw){S.qw=1;toast('Device storage is full. Back up, then remove old items.')}}}
 function loadAll(){try{const o=JSON.parse(localStorage.getItem(SK)||'null');if(!o)return;[...DK,'bk','tab'].forEach(k=>{if(o[k]!==undefined)S[k]=o[k]});useMenu(S.menu);S.aud.forEach(a=>a.at=new Date(a.at));S.led.forEach(l=>l[3]=new Date(l[3]));id=Math.max(id,...S.b.map(b=>b.id))}catch(e){}}
