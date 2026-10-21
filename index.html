@@ -372,11 +372,25 @@ function restoreF(el){
 }
 function normaliseImportedBooking(b){
  if(!b||typeof b!=='object')return null;
- const g=String(b.g??b.guest??b.guestName??b.name??'').trim(),room=String(b.room??b.roomNo??b.roomNumber??'').trim();
- const offset=v=>{if(typeof v==='number'&&Number.isFinite(v))return v;const s=String(v??'').trim();if(!s)return null;if(/^[-+]?\d+$/.test(s))return Number(s);let d;const m=s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);if(m){let a=+m[1],bb=+m[2],y=+m[3];if(y<100)y+=2000;d=a>12?new Date(y,bb-1,a,12):bb>12?new Date(y,a-1,bb,12):new Date(y,bb-1,a,12)}else d=new Date(s);if(!d||isNaN(+d))return null;return Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)};
- const inn=offset(b.in??b.checkIn??b.checkin??b.arrival??b.arrivalDate),out=offset(b.out??b.checkOut??b.checkout??b.departure??b.departureDate);
+ const rawGuest=b.g??b.guest??b.guestName??b.guest_name??b.fullName??b.full_name??b.customerName??b.name??'';
+ const g=String(typeof rawGuest==='object'?(rawGuest.name??rawGuest.fullName??rawGuest.guestName??''):rawGuest).trim();
+ const rawRoom=b.room??b.roomNo??b.roomNO??b.roomNumber??b.room_number??b.room_name??b.unit??'';
+ const room=String(typeof rawRoom==='object'?(rawRoom.n??rawRoom.name??rawRoom.number??rawRoom.roomNo??''):rawRoom).trim();
+ const offset=v=>{
+  if(typeof v==='number'&&Number.isFinite(v))return v;
+  const s=String(v??'').trim();if(!s)return null;
+  if(/^[-+]?\d+$/.test(s)&&Math.abs(Number(s))<50000)return Number(s);
+  let d;const m=s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
+  if(m){let a=+m[1],bb=+m[2],y=+m[3];if(y<100)y+=2000;d=a>12?new Date(y,bb-1,a,12):bb>12?new Date(y,a-1,bb,12):new Date(y,bb-1,a,12)}
+  else d=new Date(s);
+  if(!d||isNaN(+d))return null;
+  return Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate(),12)-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000);
+ };
+ const inn=offset(b.in??b.checkIn??b.checkin??b.check_in??b.checkInDate??b.checkinDate??b.check_in_date??b.arrival??b.arrivalDate??b.arrival_date??b.startDate??b.fromDate);
+ const out=offset(b.out??b.checkOut??b.checkout??b.check_out??b.checkOutDate??b.checkoutDate??b.check_out_date??b.departure??b.departureDate??b.departure_date??b.endDate??b.toDate);
  if(!g||!room||inn===null||out===null||out<=inn)return null;
- return {...b,id:Number.isFinite(+b.id)&&+b.id>0?+b.id:++id,g,room,in:inn,out,st:['in','checkedin','checked-in'].includes(String(b.st??b.status??'').toLowerCase())?'in':'res',ch:Array.isArray(b.ch)?b.ch:[],p:Number(b.p)||0,pays:Array.isArray(b.pays)?b.pays:[],oc:Array.isArray(b.oc)?b.oc:[],veh:Array.isArray(b.veh)?b.veh:[],checkInTime:b.checkInTime||'14:00',checkOutTime:b.checkOutTime||'11:00'};
+ const status=String(b.st??b.status??b.bookingStatus??b.booking_status??'').toLowerCase().replace(/[ _]/g,'-');
+ return {...b,id:Number.isFinite(+b.id)&&+b.id>0?+b.id:++id,g,room,in:inn,out,st:['in','checkedin','checked-in','checked_in'].includes(status)?'in':status==='done'||status==='checked-out'?'done':'res',ch:Array.isArray(b.ch)?b.ch:(Array.isArray(b.charges)?b.charges:[]),p:Number(b.p??b.paid)||0,pays:Array.isArray(b.pays)?b.pays:(Array.isArray(b.payments)?b.payments:[]),oc:Array.isArray(b.oc)?b.oc:(Array.isArray(b.occupants)?b.occupants:[]),veh:Array.isArray(b.veh)?b.veh:(Array.isArray(b.vehicles)?b.vehicles:[]),checkInTime:b.checkInTime||b.check_in_time||'14:00',checkOutTime:b.checkOutTime||b.check_out_time||'11:00'};
 }
 function restoreGo(){
  const d=S.rst;if(!d){toast('No JSON records are ready to import');return}
@@ -563,52 +577,32 @@ render();auto();
 window.__aureliaOcrTargets=window.__aureliaOcrTargets||{};
 function parseIdOcrText(raw){
  const text=String(raw||'').replace(/\r/g,'');
- const lines=text.split(/\n+/).map(x=>x.replace(/[|_]+/g,' ').replace(/\s+/g,' ').trim()).filter(Boolean);
- const excluded=/GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|\bDOB\b|\bMALE\b|\bFEMALE\b|ADDRESS|INDIA|INDIAN|ELECTION COMMISSION|UNIQUE IDENTIFICATION|AADHAAR|AADHAR|SIGNATURE|VALID/i;
- const label=/^(?:full\s*name|name|surname|given\s*names?|holder\s*name)\s*[:：.-]?\s*/i;
- let name='';
- for(let i=0;i<lines.length;i++){
-  if(label.test(lines[i])){
-   const inline=lines[i].replace(label,'').trim();
-   if(inline&&!excluded.test(inline)&&!/\d/.test(inline)&&inline.split(/\s+/).length>=2){name=inline;break}
-   const next=lines.slice(i+1,i+3).find(x=>/^[A-Z][A-Z ,.'-]{3,}$/i.test(x)&&!excluded.test(x)&&!/\d/.test(x));
-   if(next){name=next;break}
-  }
- }
- if(!name){
-  const candidates=lines.filter(x=>/^[A-Z][A-Z ,.'-]{5,}$/i.test(x)&&!excluded.test(x)&&!label.test(x)&&!/(DOB|DATE|BIRTH|S\/O|D\/O|W\/O|C\/O)/i.test(x)&&!/[0-9]/.test(x)&&x.split(/\s+/).length>=2);
-  candidates.sort((a,b)=>{const score=s=>((s.match(/\s/g)||[]).length*3)+Math.min(s.length,40)-(excluded.test(s)?100:0);return score(b)-score(a)});
-  if(candidates.length)name=candidates[0];
- }
- const idCandidates=[];
+ const lines=text.split('\n').map(v=>v.replace(/[|]/g,'I').replace(/\s+/g,' ').trim()).filter(Boolean);
+ const excluded=/GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|DOB|MALE|FEMALE|ADDRESS|INDIA|INDIAN|SIGNATURE|NRC CARD|REGISTRATION CARD/i;
+ const nameParts=[];
  for(const line of lines){
-  if(/DATE OF BIRTH|\bDOB\b|PHONE|MOBILE|PIN CODE|POSTAL|ADDRESS|ISSUE DATE|EXPIRY|VALID FROM/i.test(line))continue;
-  for(const match of line.match(/[A-Z0-9][A-Z0-9/-]{4,}/ig)||[]){
-   const value=match.replace(/[^A-Z0-9/-]/ig,'');
-   if(/\d/.test(value)&&value.length>=5&&!excluded.test(value))idCandidates.push(value);
-  }
+  if(excluded.test(line))continue;
+  const m=line.match(/^(?:full\s*name|name\s*of\s*holder|name|surname|family\s*name|given\s*names?|forenames?)\s*[:#.-]?\s*(.+)$/i);
+  if(m){const v=m[1].replace(/[^\p{L} .'’-]/gu,' ').replace(/\s+/g,' ').trim();if(v.length>=3&&!/\d/.test(v))nameParts.push(v)}
  }
- idCandidates.sort((a,b)=>b.length-a.length);
- return {name:name.replace(/\s+/g,' ').trim(),id:idCandidates[0]||'',text:lines.join('\n')};
-}
-async // Removed an older non-async OCR implementation that contained await outside async and prevented the entire script from parsing.
-
-function applyUploadedOcr(target,d){const dr=S.dr;if(!dr)return;let changed=false;if(target==='main'){if(d.name){dr.g.n=d.name;changed=true}if(d.id){dr.g.idn=d.id;changed=true}}else if(target.startsWith('occ:')){const o=dr.oc[Number(target.split(':')[1])];if(o){if(d.name){o.n=d.name;changed=true}if(d.id){o.idn=d.id;changed=true}}}if(changed){aud('ID OCR','Suggested details from uploaded ID; staff verification required');dsheet();toast('OCR suggestions filled — verify against original')}else toast('ID photo saved; OCR found no confident name/number. Enter manually.')}
-const _aureliaNativeOcrResult=window.aureliaNativeOcrResult;
-window.aureliaNativeOcrResult=(requestId,payload)=>{const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload;applyUploadedOcr(target,{name:d.fullName||d.name||'',id:d.idNumber||d.id||'',text:d.text||''})}catch(e){toast('OCR result could not be read; enter details manually')}return}if(_aureliaNativeOcrResult)_aureliaNativeOcrResult(requestId,payload)};
-
-/* Targeted reliability fixes: ID OCR field routing, Android-safe exports, dynamic UPI QR. */
-function parseIdOcrText(raw){
- const text=String(raw||'').replace(/\r/g,'');
- const lines=text.split('\n').map(v=>v.trim()).filter(Boolean);
- const excluded=/GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|DOB|MALE|FEMALE|ADDRESS|INDIA|INDIAN/i;
- const labelLine=lines.find(v=>/^(?:full\s*name|name|surname|given\s*names?)\s*[:.-]?\s*\S/i.test(v));
- let name=labelLine?labelLine.replace(/^(?:full\s*name|name|surname|given\s*names?)\s*[:.-]?\s*/i,'').trim():'';
- if(!name){const candidate=lines.find(v=>/^[A-Z][A-Z ,.'-]{4,}$/.test(v)&&!excluded.test(v)&&! /\d/.test(v));if(candidate)name=candidate.trim();}
- const candidates=[];
- for(const line of lines){if(/DOB|DATE OF BIRTH|PHONE|MOBILE|PIN|POSTAL|ADDRESS/i.test(line))continue;for(const value of (line.match(/[A-Z0-9][A-Z0-9/-]{4,}/ig)||[])){const v=value.replace(/[^A-Z0-9/-]/ig,'');if(/\d/.test(v)&&v.length>=5&&!excluded.test(v))candidates.push(v);}}
- candidates.sort((a,b)=>b.length-a.length);
- return {name,id:candidates[0]||'',text:lines.join('\n')};
+ let name=nameParts.find(v=>!/^(surname|given names?|forenames?)$/i.test(v))||'';
+ if(!name){
+  const candidate=lines.find(v=>v.length>=5&&v.length<=60&&!excluded.test(v)&&!/[\d@]/.test(v)&&/^[\p{L}][\p{L} .'’-]+$/u.test(v)&&v.split(/\s+/).length>=2);
+  if(candidate)name=candidate.trim();
+ }
+ const idPatterns=[
+  /(?:NRC|ID|IDENTITY|DOCUMENT|PASSPORT|CARD)\s*(?:NO|NUMBER|#)?\s*[:#.-]?\s*([A-Z0-9][A-Z0-9/-]{4,})/i,
+  /\b([A-Z]{1,3}[-/]?\d[A-Z0-9/-]{4,})\b/i,
+  /\b(\d{6,14})\b/
+ ];
+ let id='';
+ for(const line of lines){if(/DATE OF BIRTH|\bDOB\b|PHONE|MOBILE|TEL|POSTAL|PIN CODE|ADDRESS/i.test(line))continue;for(const p of idPatterns){const m=line.match(p);if(m&&m[1]&&!excluded.test(m[1])){id=m[1].replace(/\s+/g,'').trim();break}}if(id)break}
+ if(!id){
+  const candidates=[];
+  for(const line of lines){if(excluded.test(line)||/DATE OF BIRTH|\bDOB\b|PHONE|MOBILE|TEL|POSTAL|PIN CODE|ADDRESS/i.test(line))continue;for(const m of line.matchAll(/\b[A-Z0-9][A-Z0-9/-]{5,}\b/ig)){const v=m[0];if(/\d/.test(v)&&!/^\d{4}[-/]\d{1,2}[-/]\d{1,2}$/.test(v))candidates.push(v)}}
+  candidates.sort((a,b)=>b.length-a.length);id=candidates[0]||'';
+ }
+ return {name,id,text:lines.join('\n')};
 }
 async function ocrUploadedId(file,target){
  if(!file||!S.dr)return;
