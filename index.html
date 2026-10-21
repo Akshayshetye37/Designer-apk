@@ -527,29 +527,68 @@ function parseIdOcrText(raw){
  return {name,id:candidates[0]||'',text:lines.join('\n')};
 }
 async function ocrUploadedId(file,target){
- if(!file||!S.dr)return;toast('Reading ID photo…');
+ if(!file||!S.dr)return;
+ if(S.set.ocrEnabled===false){toast('OCR is disabled in Settings');return}
+ const requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);
+ window.__aureliaOcrTargets=window.__aureliaOcrTargets||{};
+ window.__aureliaOcrTargets[requestId]=target;
+ toast('Reading ID with PaddleOCR…');
  try{
-  if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,8);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId];}
+  const small=await resizeForOcr(file);
+  if(!window._paddleOcr){
+   try{
+    const mod=await import('https://esm.sh/@paddleocr/paddleocr-js@0.4.2');
+    const PaddleOCR=mod.PaddleOCR||mod.default?.PaddleOCR;
+    if(!PaddleOCR)throw new Error('PaddleOCR SDK did not expose PaddleOCR');
+    window._paddleOcr=await PaddleOCR.create({lang:'en',ocrVersion:'PP-OCRv5',ortOptions:{backend:'wasm',wasmPaths:'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/',numThreads:2,simd:true}});
+   }catch(e){console.warn('PaddleOCR init failed; using native/browser fallback',e)}
+  }
+  if(window._paddleOcr){
+   try{
+    const results=await window._paddleOcr.predict(small),result=Array.isArray(results)?results[0]:results;
+    const text=(result?.items||[]).map(x=>x.text||'').filter(Boolean).join('\n');
+    const d=parseIdOcrText(text);
+    if(text.trim()&&(d.name||d.id)){delete window.__aureliaOcrTargets[requestId];applyUploadedOcr(target,{...d,text});return}
+   }catch(e){console.warn('PaddleOCR prediction failed',e)}
+  }
+  if(window.AureliaNative&&nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)})){
+   toast('PaddleOCR unavailable or uncertain; Android OCR is processing the image…');return;
+  }
   if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');
-  const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text));
- }catch(e){toast('OCR failed. Verify or enter ID details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180));}
+  const result=await window.Tesseract.recognize(small,'eng');
+  delete window.__aureliaOcrTargets[requestId];
+  applyUploadedOcr(target,{...parseIdOcrText(result.data.text||''),text:result.data.text||''});
+ }catch(e){
+  delete window.__aureliaOcrTargets[requestId];
+  console.error('ID OCR failed',e);toast('OCR failed. Keep the photo and enter the name and ID number manually.');
+  aud('ID OCR failed',String(e&&e.message||e).slice(0,180));
+ }
 }
 function applyUploadedOcr(target,d){
- const dr=S.dr;if(!dr)return;let destination=null;
+ const dr=S.dr;if(!dr){toast('Open the guest form again and retry OCR.');return}
+ let destination=null;
  if(target==='main')destination=dr.g;
  else if(String(target).startsWith('occ:'))destination=dr.oc[Number(String(target).split(':')[1])];
- if(!destination){toast('Matching guest form is no longer open.');return;}
- const name=String(d.name||d.fullName||'').trim(),id=String(d.id||d.idNumber||'').trim();
- if(name)destination.n=name;if(id)destination.idn=id;
+ if(!destination){toast('Matching guest form is no longer open.');return}
+ const parsed=parseIdOcrText(d.text||'');
+ const name=String(d.name||d.fullName||parsed.name||'').replace(/\s+/g,' ').trim();
+ const idNumber=String(d.id||d.idNumber||parsed.id||'').replace(/\s+/g,' ').trim();
+ if(name)destination.n=name;
+ if(idNumber)destination.idn=idNumber;
  dsheet();
  const panel=$('#pan');
  if(panel&&panel.classList.contains('show')){
-  if(target==='main'){if($('#d1'))$('#d1').value=destination.n||'';if($('#d5'))$('#d5').value=destination.idn||'';}
-  else{const row=$('.oc2',panel)[Number(String(target).split(':')[1])];if(row){const ni=row.querySelector('.a'),ii=row.querySelector('.d');if(ni)ni.value=destination.n||'';if(ii)ii.value=destination.idn||'';}}
+  if(target==='main'){
+   if($('#d1'))$('#d1').value=destination.n||'';
+   if($('#d5'))$('#d5').value=destination.idn||'';
+  }else{
+   const row=$$('.oc2',panel)[Number(String(target).split(':')[1])];
+   if(row){const ni=row.querySelector('.a'),ii=row.querySelector('.d');if(ni)ni.value=destination.n||'';if(ii)ii.value=destination.idn||''}
+  }
  }
  rdD();
- toast(name||id?'OCR filled the matching guest fields. Verify before saving.':'Text extracted but name/ID were not confidently identified.');
- if(d.text)aud('ID OCR','Text extracted; verify suggested guest fields');
+ if(name||idNumber){toast('OCR filled the matching name and ID fields. Verify before saving.');aud('ID OCR','Suggested fields filled; staff verification required')}
+ else toast('Text was read, but name or ID number was not confidently identified. Enter it manually.');
 }
 const _aureliaNativeOcrResultFixed=window.aureliaNativeOcrResult;
 window.aureliaNativeOcrResult=(requestId,payload)=>{
