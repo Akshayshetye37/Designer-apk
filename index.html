@@ -626,8 +626,11 @@ function applyUploadedOcr(target,d){
 }
 const _aureliaNativeOcrResultFixed=window.aureliaNativeOcrResult;
 window.aureliaNativeOcrResult=(requestId,payload)=>{
+ let d;try{d=typeof payload==='string'?JSON.parse(payload):payload||{}}catch(e){d={text:String(payload||'')}}
  const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];
- if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload,parsed=parseIdOcrText(d.text||'');applyUploadedOcr(target,{name:d.fullName||d.name||parsed.name,id:d.idNumber||d.id||parsed.id,text:d.text||''});}catch(e){toast('Could not read OCR result. Enter details manually.');}return;}
+ if(target){delete window.__aureliaOcrTargets[requestId];try{const parsed=parseIdOcrText(d.text||'');applyUploadedOcr(target,{name:d.fullName||d.name||parsed.name,id:d.idNumber||d.id||parsed.id,text:d.text||''});}catch(e){toast('Could not read OCR result. Enter details manually.');}return;}
+ const pending=window._pendingOcr&&window._pendingOcr[requestId];
+ if(pending){delete window._pendingOcr[requestId];const parsed=parseIdOcrText(d.text||'');const name=d.fullName||d.name||parsed.name||'',id=d.idNumber||d.id||parsed.id||'';pending.innerHTML='<div class="ln"><span>Engine</span><b>Android text recognition</b></div><div class="ln"><span>Proposed name</span><b>'+esc(name||'Not detected')+'</b></div><div class="ln"><span>Proposed ID number</span><b>'+esc(id||'Not detected')+'</b></div><div style="white-space:pre-wrap">'+esc(d.text||'')+'</div><button class="btn sm" onclick="applyOcrFields(\''+esc(name).replace(/'/g,'’')+'\',\''+esc(id).replace(/'/g,'’')+'\')">Use suggested fields</button>';return;}
  if(_aureliaNativeOcrResultFixed)_aureliaNativeOcrResultFixed(requestId,payload);
 };
 /* Android WebView-safe PNG export using html2canvas, then native Save As dialog. */
