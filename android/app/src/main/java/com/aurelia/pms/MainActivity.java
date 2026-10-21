@@ -48,7 +48,12 @@ public class MainActivity extends Activity {
         webView.getSettings().setDomStorageEnabled(true);
         webView.getSettings().setAllowFileAccess(true);
         webView.getSettings().setAllowContentAccess(true);
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view,String url) {
+                super.onPageFinished(view,url);
+                sendBackupFolderResult("status",backupTreeUri!=null,backupTreeUri==null?"":"Selected folder");
+            }
+        });
         webView.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams p) {
                 if (fileCallback != null) fileCallback.onReceiveValue(null);
@@ -62,7 +67,6 @@ public class MainActivity extends Activity {
         webView.loadUrl("file:///android_asset/index.html");
         String savedTree=getSharedPreferences("aurelia_backup",MODE_PRIVATE).getString("tree_uri",null);
         if(savedTree!=null){try{backupTreeUri=Uri.parse(savedTree);getContentResolver().takePersistableUriPermission(backupTreeUri,Intent.FLAG_GRANT_READ_URI_PERMISSION|Intent.FLAG_GRANT_WRITE_URI_PERMISSION);}catch(Exception ignored){}}
-        webView.postDelayed(()->{if(webView!=null)webView.evaluateJavascript("window.aureliaNativeDeviceBackupStatusResult&&window.aureliaNativeDeviceBackupStatusResult('status',"+(backupTreeUri!=null)+")",null);},700);
     }
 
     private class NativeBridge {
@@ -259,7 +263,7 @@ public class MainActivity extends Activity {
                     String label=uri.getLastPathSegment()==null?"Selected folder":uri.getLastPathSegment().replaceAll(".*:","");
                     sendBackupFolderResult(req,true,label);
                 } catch(Exception e){Log.e("AureliaPMS","Persist folder permission failed",e);sendBackupFolderResult(req,false,"Could not keep folder permission");}
-            } else sendBackupFolderResult(req,false,"Folder selection cancelled");
+            } else sendBackupFolderResult(req,backupTreeUri!=null,backupTreeUri==null?"Folder selection cancelled":"");
         }
         else if(r==CREATE_EXPORT_FILE) {
             String data=pendingExportBase64;pendingExportBase64=null;
