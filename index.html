@@ -354,10 +354,9 @@ function restoreF(el){
   let selected=null,shape=null;
   for(const x of candidates){const a=arrays(x);if(Array.isArray(a.rooms)||Array.isArray(a.bookings)||Array.isArray(a.guests)){selected=x;shape=a;break}}
   if(!selected)throw new Error('No rooms, guests or bookings arrays were found in this JSON file.');
-  const isSnapshot=!!(selected===raw.data||selected===raw.payload||selected===raw.backup||selected===raw.export||selected===raw.records) &&
-   Array.isArray(selected.rooms||selected.roomList||selected.room_list) &&
-   Array.isArray(selected.b||selected.bookings||selected.stays||selected.reservations) &&
-   (Array.isArray(selected.aud)||Array.isArray(selected.set)||Array.isArray(selected.hist)||Array.isArray(selected.menu)||selected===raw.data&&raw.v===2);
+  const hasFullState=['set','menu','hist','au','today','day','terms','sig','sales','led','fe','inN','t'].some(k=>selected[k]!==undefined)||raw.v===2;
+  const isSnapshot=Array.isArray(selected.rooms||selected.roomList||selected.room_list||selected.roomRecords) &&
+   Array.isArray(selected.b||selected.bookings||selected.stays||selected.reservations||selected.bookingRecords) && hasFullState;
   if(isSnapshot){
    const d=selected,normal={...d,rooms:shape.rooms,b:shape.bookings,g:Array.isArray(shape.guests)?shape.guests:[],t:Array.isArray(d.t)?d.t:(d.tables||[]),exp:Array.isArray(shape.expenses)?shape.expenses:[],inv:Array.isArray(shape.inventory)?shape.inventory:[],aud:Array.isArray(d.aud)?d.aud:(d.audit||[]),hist:Array.isArray(d.hist)?d.hist:(d.history||[0,0,0,0,0,0])};
    S.rst=normal;S.rstMode='snapshot';
@@ -380,6 +379,7 @@ function normaliseImportedBooking(b){
   if(typeof v==='number'&&Number.isFinite(v))return v;
   const s=String(v??'').trim();if(!s)return null;
   if(/^[-+]?\d+$/.test(s)&&Math.abs(Number(s))<50000)return Number(s);
+  if(/^\d{8}$/.test(s)){const y=+s.slice(0,4),mo=+s.slice(4,6),da=+s.slice(6,8),dt=new Date(y,mo-1,da,12);if(dt.getFullYear()===y&&dt.getMonth()===mo-1&&dt.getDate()===da)return Math.round((dt-new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate(),12))/86400000)}
   let d;const m=s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
   if(m){let a=+m[1],bb=+m[2],y=+m[3];if(y<100)y+=2000;d=a>12?new Date(y,bb-1,a,12):bb>12?new Date(y,a-1,bb,12):new Date(y,bb-1,a,12)}
   else d=new Date(s);
