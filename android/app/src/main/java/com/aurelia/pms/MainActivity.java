@@ -71,6 +71,20 @@ public class MainActivity extends Activity {
                 JSONObject q = new JSONObject(raw);
                 String type = q.optString("type");
                 if ("recognizeId".equals(type)) recognize(q);
+                else if ("chooseDeviceBackupFolder".equals(type)) {
+                    String req=q.optString("requestId","");
+                    runOnUiThread(() -> chooseBackupFolder(req));
+                }
+                else if ("backupDeviceNow".equals(type)) {
+                    String req=q.optString("requestId","");
+                    String name=q.optString("name","aurelia-backup.json");
+                    String payload=q.optString("payload","");
+                    runOnUiThread(() -> saveDeviceBackup(req,name,payload));
+                }
+                else if ("deviceBackupStatus".equals(type)) {
+                    String req=q.optString("requestId","");
+                    runOnUiThread(() -> sendBackupFolderResult(req,backupTreeUri!=null,backupTreeUri==null?"":"Selected folder"));
+                }
                 else if ("printInvoice".equals(type)) runOnUiThread(() -> printHtml(q.optString("html", "")));
                 else if ("shareText".equals(type)) { String title=q.optString("title","Share"); String text=q.optString("text",""); runOnUiThread(() -> shareText(title,text)); }
                 else if ("shareImage".equals(type)) { String name=q.optString("name","invoice.png"); String data=q.optString("data",""); runOnUiThread(() -> shareImage(name,data)); }
