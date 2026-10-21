@@ -372,12 +372,17 @@ function normaliseImportedBooking(b){
 function restoreGo(){
  const d=S.rst;if(!d){toast('No JSON records are ready to import');return}
  if(S.rstMode==='export'){
+  let roomsAdded=0,ga=0,ba=0,sk=0,expensesAdded=0,inventoryAdded=0;
+  const knownRooms=new Set(S.rooms.map(r=>String(r.n??r.room??r.roomNo??'').trim().toLowerCase()));
+  (d.rooms||[]).forEach(r=>{if(!r||typeof r!=='object'){sk++;return}const rn=String(r.n??r.room??r.roomNo??'').trim();if(!rn){sk++;return}if(knownRooms.has(rn.toLowerCase()))return;S.rooms.push({...r,n:rn});knownRooms.add(rn.toLowerCase());roomsAdded++});
   const roomNames=new Set(S.rooms.map(r=>String(r.n??r.room??r.roomNo??'').trim()));
   const guestNames=new Set(S.g.map(g=>String(g.n??g.name??'').trim().toLowerCase()));
-  let ga=0,ba=0,sk=0;
   (d.g||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}const n=String(x.n??x.name??x.guestName??'').trim();if(!n){sk++;return}if(guestNames.has(n.toLowerCase()))return;S.g.push({...x,n,ph:x.ph??x.phone??x.mobile??'',em:x.em??x.email??'',idt:x.idt??x.idType??'',idn:x.idn??x.idNumber??''});guestNames.add(n.toLowerCase());ga++});
   (d.b||[]).forEach(x=>{const b=normaliseImportedBooking(x);if(!b){sk++;return}if(!roomNames.has(String(b.room))){sk++;return}if(S.b.some(y=>String(y.g||'').toLowerCase()===b.g.toLowerCase()&&String(y.room)===b.room&&y.in===b.in&&y.out===b.out))return;S.b.push(b);ba++;id=Math.max(id,+b.id||0)});
-  S.rst=null;S.rstMode=null;persist();render();closeS();toast('JSON import: '+ga+' guests, '+ba+' bookings added; '+sk+' invalid rows skipped.');return;
+  (d.exp||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}if(!S.exp.some(y=>JSON.stringify(y)===JSON.stringify(x))){S.exp.push(x);expensesAdded++}});
+  (d.inv||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}const n=String(x.n??x.name??'').trim();if(!n){sk++;return}const at=S.inv.findIndex(y=>String(y.n??y.name??'').trim().toLowerCase()===n.toLowerCase());if(at<0){S.inv.push({...x,n});inventoryAdded++}else S.inv[at]={...S.inv[at],...x,n}});
+  (d.aud||[]).forEach(x=>{if(x&&typeof x==='object'&&!S.aud.some(y=>JSON.stringify(y)===JSON.stringify(x)))S.aud.push(x)});
+  S.rst=null;S.rstMode=null;persist();render();closeS();toast('JSON import: '+roomsAdded+' rooms, '+ga+' guests, '+ba+' bookings, '+expensesAdded+' expenses, '+inventoryAdded+' stock items added; '+sk+' invalid rows skipped.');return;
  }
  DK.forEach(k=>{if(d[k]!==undefined)S[k]=d[k]});
  ['rooms','b','g','t','exp','inv','aud'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
