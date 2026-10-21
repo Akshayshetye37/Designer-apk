@@ -381,22 +381,62 @@ function normaliseImportedBooking(b){
 function restoreGo(){
  const d=S.rst;if(!d){toast('No JSON records are ready to import');return}
  if(S.rstMode==='export'){
-  let roomsAdded=0,ga=0,ba=0,sk=0,expensesAdded=0,inventoryAdded=0;
-  const knownRooms=new Set(S.rooms.map(r=>String(r.n??r.room??r.roomNo??'').trim().toLowerCase()));
-  (d.rooms||[]).forEach(r=>{if(!r||typeof r!=='object'){sk++;return}const rn=String(r.n??r.room??r.roomNo??'').trim();if(!rn){sk++;return}if(knownRooms.has(rn.toLowerCase()))return;S.rooms.push({...r,n:rn});knownRooms.add(rn.toLowerCase());roomsAdded++});
-  const roomNames=new Set(S.rooms.map(r=>String(r.n??r.room??r.roomNo??'').trim()));
-  const guestNames=new Set(S.g.map(g=>String(g.n??g.name??'').trim().toLowerCase()));
-  (d.g||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}const n=String(x.n??x.name??x.guestName??'').trim();if(!n){sk++;return}if(guestNames.has(n.toLowerCase()))return;S.g.push({...x,n,ph:x.ph??x.phone??x.mobile??'',em:x.em??x.email??'',idt:x.idt??x.idType??'',idn:x.idn??x.idNumber??''});guestNames.add(n.toLowerCase());ga++});
-  (d.b||[]).forEach(x=>{const b=normaliseImportedBooking(x);if(!b){sk++;return}if(!roomNames.has(String(b.room))){sk++;return}if(S.b.some(y=>String(y.g||'').toLowerCase()===b.g.toLowerCase()&&String(y.room)===b.room&&y.in===b.in&&y.out===b.out))return;S.b.push(b);ba++;id=Math.max(id,+b.id||0)});
-  (d.exp||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}if(!S.exp.some(y=>JSON.stringify(y)===JSON.stringify(x))){S.exp.push(x);expensesAdded++}});
-  (d.inv||[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}const n=String(x.n??x.name??'').trim();if(!n){sk++;return}const at=S.inv.findIndex(y=>String(y.n??y.name??'').trim().toLowerCase()===n.toLowerCase());if(at<0){S.inv.push({...x,n});inventoryAdded++}else S.inv[at]={...S.inv[at],...x,n}});
-  (d.aud||[]).forEach(x=>{if(x&&typeof x==='object'&&!S.aud.some(y=>JSON.stringify(y)===JSON.stringify(x)))S.aud.push(x)});
-  S.rst=null;S.rstMode=null;persist();render();closeS();toast('JSON import: '+roomsAdded+' rooms, '+ga+' guests, '+ba+' bookings, '+expensesAdded+' expenses, '+inventoryAdded+' stock items added; '+sk+' invalid rows skipped.');return;
+  let roomsAdded=0,ga=0,ba=0,sk=0,expensesAdded=0,inventoryAdded=0,guestFromBooking=0,roomsCreatedForBooking=0;
+  const roomKey=v=>String(v??'').trim().toLowerCase();
+  const knownRooms=new Set(S.rooms.map(r=>roomKey(r.n??r.room??r.roomNo)));
+  (Array.isArray(d.rooms)?d.rooms:[]).forEach(r=>{
+   if(!r||typeof r!=='object'){sk++;return}
+   const rn=String(r.n??r.room??r.roomNo??r.roomNumber??'').trim();if(!rn){sk++;return}
+   if(knownRooms.has(roomKey(rn)))return;
+   S.rooms.push({...r,n:rn});knownRooms.add(roomKey(rn));roomsAdded++;
+  });
+  const guestNames=new Set(S.g.map(g=>String(g.n??g.name??g.guestName??'').trim().toLowerCase()));
+  (Array.isArray(d.g)?d.g:[]).forEach(x=>{
+   if(!x||typeof x!=='object'){sk++;return}
+   const n=String(x.n??x.name??x.guestName??x.fullName??'').trim();if(!n){sk++;return}
+   if(guestNames.has(n.toLowerCase()))return;
+   S.g.push({...x,n,ph:x.ph??x.phone??x.mobile??x.contact??'',em:x.em??x.email??x.emailAddress??'',idt:x.idt??x.idType??x.documentType??'',idn:x.idn??x.idNumber??x.documentNumber??'',occ:Array.isArray(x.occ)?x.occ:[]});
+   guestNames.add(n.toLowerCase());ga++;
+  });
+  (Array.isArray(d.b)?d.b:[]).forEach(x=>{
+   const b=normaliseImportedBooking(x);if(!b){sk++;return}
+   const rn=String(b.room).trim(),rk=roomKey(rn);
+   if(!knownRooms.has(rk)){
+    const template=S.rooms[0]||{};
+    S.rooms.push({...template,n:rn,t:template.t||'Imported',r:Number.isFinite(+template.r)?+template.r:0,s:'ready',demo:0});
+    knownRooms.add(rk);roomsAdded++;roomsCreatedForBooking++;
+   }
+   const duplicate=S.b.some(y=>String(y.g||'').trim().toLowerCase()===b.g.trim().toLowerCase()&&roomKey(y.room)===rk&&Number(y.in)===Number(b.in)&&Number(y.out)===Number(b.out));
+   if(duplicate){sk++;return}
+   if(S.b.some(y=>String(y.id)===String(b.id)))b.id=++id;else id=Math.max(id,+b.id||0);
+   S.b.push(b);ba++;
+   const gname=String(b.g||'').trim(),gkey=gname.toLowerCase();
+   if(gname&&!guestNames.has(gkey)){
+    S.g.push({n:gname,ph:b.ph||b.phone||'',em:b.em||b.email||'',idt:b.idt||b.idType||'',idn:b.idn||b.idNumber||'',img:b.img||'',occ:[],demo:0});
+    guestNames.add(gkey);ga++;guestFromBooking++;
+   }
+  });
+  (Array.isArray(d.exp)?d.exp:[]).forEach(x=>{if(!x||typeof x!=='object'){sk++;return}if(!S.exp.some(y=>JSON.stringify(y)===JSON.stringify(x))){S.exp.push(x);expensesAdded++}});
+  (Array.isArray(d.inv)?d.inv:[]).forEach(x=>{
+   if(!x||typeof x!=='object'){sk++;return}
+   const n=String(x.n??x.name??x.item??'').trim();if(!n){sk++;return}
+   const at=S.inv.findIndex(y=>String(y.n??y.name??'').trim().toLowerCase()===n.toLowerCase());
+   if(at<0){S.inv.push({...x,n});inventoryAdded++}else S.inv[at]={...S.inv[at],...x,n};
+  });
+  (Array.isArray(d.aud)?d.aud:[]).forEach(x=>{if(x&&typeof x==='object'&&!S.aud.some(y=>JSON.stringify(y)===JSON.stringify(x)))S.aud.push(x)});
+  S.rst=null;S.rstMode=null;persist();render();closeS();
+  toast('JSON import: '+roomsAdded+' rooms, '+ga+' guests, '+ba+' bookings, '+expensesAdded+' expenses, '+inventoryAdded+' stock items; '+sk+' invalid/duplicate rows skipped.'+(roomsCreatedForBooking?' Created '+roomsCreatedForBooking+' placeholder room(s); review their room type and rate.':''));
+  return;
  }
- DK.forEach(k=>{if(d[k]!==undefined)S[k]=d[k]});
+ // Full Aurelia backup: validate core arrays before replacing the current state.
+ if(!Array.isArray(d.rooms)||!Array.isArray(d.b)){toast('Backup is missing the room or booking list. Current data was not changed.');return}
+ const restored={...d,rooms:d.rooms,b:d.b,g:Array.isArray(d.g)?d.g:[],t:Array.isArray(d.t)?d.t:[],exp:Array.isArray(d.exp)?d.exp:[],inv:Array.isArray(d.inv)?d.inv:[],aud:Array.isArray(d.aud)?d.aud:[],hist:Array.isArray(d.hist)?d.hist:[0,0,0,0,0,0]};
+ const validBookings=[],invalidBookings=[];
+ restored.b.forEach(x=>{const b=normaliseImportedBooking(x);if(b)validBookings.push(b);else invalidBookings.push(x)});
+ restored.b=validBookings;
+ DK.forEach(k=>{if(restored[k]!==undefined)S[k]=restored[k]});
  ['rooms','b','g','t','exp','inv','aud'].forEach(k=>{if(!Array.isArray(S[k]))S[k]=[]});
- if(!Array.isArray(S.hist))S.hist=[0,0,0,0,0,0];
- S.b=S.b.map(normaliseImportedBooking).filter(Boolean);id=Math.max(id,0,...S.b.map(b=>+b.id||0));
+ id=Math.max(id,0,...S.b.map(b=>+b.id||0));
  S.rst=null;S.rstMode=null;persist();location.reload();
 }
 const useMenu=m=>{Object.keys(MENU).forEach(k=>delete MENU[k]);Object.assign(MENU,m);S.menu=MENU};
