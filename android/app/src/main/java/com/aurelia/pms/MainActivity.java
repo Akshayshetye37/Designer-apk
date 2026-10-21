@@ -137,7 +137,8 @@ public class MainActivity extends Activity {
     private void saveDeviceBackup(String requestId,String name,String payload) {
         if(backupTreeUri==null){sendBackupResult(requestId,false,"Choose a backup folder first");return;}
         try {
-            Uri fileUri=DocumentsContract.createDocument(getContentResolver(),backupTreeUri,"application/json",name);
+            Uri parent=DocumentsContract.buildDocumentUriUsingTree(backupTreeUri,DocumentsContract.getTreeDocumentId(backupTreeUri));
+            Uri fileUri=DocumentsContract.createDocument(getContentResolver(),parent,"application/json",name);
             if(fileUri==null)throw new IllegalStateException("Could not create backup file");
             try(OutputStream out=getContentResolver().openOutputStream(fileUri,"wt")) {
                 if(out==null)throw new IllegalStateException("Could not open backup file");
