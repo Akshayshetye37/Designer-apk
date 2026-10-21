@@ -7,6 +7,7 @@ import android.content.ActivityNotFoundException;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+import android.provider.MediaStore;
 import android.os.Bundle;
 import android.print.PrintAttributes;
 import android.print.PrintDocumentAdapter;
@@ -65,6 +66,7 @@ public class MainActivity extends Activity {
                 if ("recognizeId".equals(type)) recognize(q);
                 else if ("printInvoice".equals(type)) runOnUiThread(() -> printHtml(q.optString("html", "")));
                 else if ("shareText".equals(type)) { String title=q.optString("title","Share"); String text=q.optString("text",""); runOnUiThread(() -> shareText(title,text)); }
+                else if ("shareImage".equals(type)) { String name=q.optString("name","invoice.png"); String data=q.optString("data",""); runOnUiThread(() -> shareImage(name,data)); }
                 else if ("openUrl".equals(type)) { String url=q.optString("url",""); runOnUiThread(() -> openExternalUrl(url)); }
                 else if ("saveFile".equals(type)) {
                     String name=q.optString("name","aurelia-export.bin"), mime=q.optString("mime","application/octet-stream");
@@ -111,6 +113,24 @@ public class MainActivity extends Activity {
     private void send(String id,JSONObject payload) {
         String js="window.aureliaNativeOcrResult&&window.aureliaNativeOcrResult("+JSONObject.quote(id)+","+JSONObject.quote(payload.toString())+");";
         runOnUiThread(()->webView.evaluateJavascript(js,null));
+    }
+
+    private void shareImage(String name,String base64) {
+        try {
+            byte[] bytes=Base64.decode(base64,Base64.DEFAULT);
+            Bitmap bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length);
+            if(bitmap==null){toastJs("Could not create invoice image.");return;}
+            String safeName=(name==null?"invoice.png":name).replaceAll("[^A-Za-z0-9._-]","_");
+            String uriString=MediaStore.Images.Media.insertImage(getContentResolver(),bitmap,safeName,"Aurelia PMS invoice");
+            bitmap.recycle();
+            if(uriString==null){toastJs("Could not prepare PNG for sharing.");return;}
+            Uri uri=Uri.parse(uriString);
+            Intent intent=new Intent(Intent.ACTION_SEND);
+            intent.setType("image/png");
+            intent.putExtra(Intent.EXTRA_STREAM,uri);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent,"Share invoice PNG"));
+        } catch(Exception e){Log.e("AureliaPMS","Image share failed",e);toastJs("Could not open image sharing.");}
     }
 
     private void shareText(String title,String text) {
