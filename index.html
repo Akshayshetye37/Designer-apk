@@ -590,3 +590,32 @@ SUB.io=function(){
  const html=_aureliaIoOriginal();
  return html.replace('<p class="lab" style="margin-top:14px">Encrypted backup', '<div class="card" style="margin-top:14px"><h3>Import reservations from Excel</h3><p class="lab">Select an .xlsx or .xls file with Guest, Room, Check-in and Check-out columns. Existing reservations are kept.</p><label class="btn sm" style="display:inline-block">Choose Excel file<input type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" style="display:none" onchange="importXlsxFile(this)"></label></div><p class="lab" style="margin-top:14px">Encrypted backup');
 };
+
+
+/* Aurelia PMS polished UI pass — presentation only; existing workflows and data logic remain unchanged. */
+(function(){
+ const css=`
+ :root{--gold:#e8cf91;--gold2:#b18b48;--ln:rgba(232,207,145,.28)}
+ html{scroll-behavior:smooth;overscroll-behavior-y:contain}
+ body{-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+ .app{padding-left:clamp(14px,4vw,24px);padding-right:clamp(14px,4vw,24px)}
+ .card{box-shadow:0 12px 28px rgba(0,0,0,.12);backdrop-filter:blur(8px)}
+ .card:active{border-color:rgba(232,207,145,.48)}
+ .btn{letter-spacing:.01em;min-height:42px}
+ .btn:focus-visible,.chip:focus-visible,.dock button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+ .fld input,.fld select,.fld textarea,.oc2 input,.oc2 select{min-height:46px;border-color:rgba(232,207,145,.25);transition:border-color .18s,box-shadow .18s,background .18s}
+ .fld input:focus,.fld select:focus,.fld textarea:focus,.oc2 input:focus,.oc2 select:focus{background:rgba(255,255,255,.075);border-color:var(--gold);box-shadow:0 0 0 3px rgba(232,207,145,.12)}
+ .pan{max-height:calc(92dvh - env(safe-area-inset-top,0px));padding-bottom:calc(24px + env(safe-area-inset-bottom,0px));overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:rgba(232,207,145,.35) transparent}
+ .sheet.show .scrim{animation:fade .22s ease-out}
+ .sheet.show .pan{animation:up .28s cubic-bezier(.2,.8,.2,1)}
+ #toast{z-index:100;max-width:calc(100vw - 28px);width:max-content;box-shadow:0 10px 30px rgba(0,0,0,.3);font-size:14px;line-height:1.4}
+ .dock{padding:5px;background:rgba(6,20,14,.88);border-color:rgba(232,207,145,.3);box-shadow:0 14px 40px rgba(0,0,0,.4)}
+ .dock button{min-height:48px}
+ .item{min-width:0}.item .f{overflow-wrap:anywhere}
+ .chips{scroll-snap-type:x proximity}.chip{scroll-snap-align:start}
+ .invoice{overflow-wrap:anywhere}
+ @media(max-width:420px){.app{padding-top:10px}.hero{height:350px;border-radius:24px}.card{padding:15px}.pan{border-radius:24px 24px 0 0;padding-left:16px;padding-right:16px}.btn{padding:11px 15px}.dock{bottom:calc(8px + env(safe-area-inset-bottom,0px))}}
+ @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}.sheet.show .pan,.sheet.show .scrim{animation:none}}
+ `;
+ const style=document.createElement('style');style.id='aurelia-polish-pass';style.textContent=css;document.head.appendChild(style);
+})();
