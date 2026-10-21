@@ -522,7 +522,7 @@ function parseIdOcrText(raw){
   }
  }
  if(!name){
-  const candidates=lines.filter(x=>/^[A-Z][A-Z ,.'-]{5,}$/i.test(x)&&!excluded.test(x)&&!label.test(x)&&!/(DOB|DATE|BIRTH|S/O|D/O|W/O|C/O)/i.test(x)&&!/[0-9]/.test(x)&&x.split(/\s+/).length>=2);
+  const candidates=lines.filter(x=>/^[A-Z][A-Z ,.'-]{5,}$/i.test(x)&&!excluded.test(x)&&!label.test(x)&&!/(DOB|DATE|BIRTH|S\\/O|D\\/O|W\\/O|C\\/O)/i.test(x)&&!/[0-9]/.test(x)&&x.split(/\s+/).length>=2);
   candidates.sort((a,b)=>{const score=s=>((s.match(/\s/g)||[]).length*3)+Math.min(s.length,40)-(excluded.test(s)?100:0);return score(b)-score(a)});
   if(candidates.length)name=candidates[0];
  }
