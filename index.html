@@ -341,24 +341,33 @@ window.aureliaNativeDeviceBackupResult=(id,ok,err)=>bkDone(ok,err);window.aureli
 function restoreF(el){
  const f=el.files&&el.files[0];if(!f)return;
  f.text().then(t=>{
-  const raw=JSON.parse(t),isSnapshot=!!(raw&&raw.data&&(Array.isArray(raw.data.rooms)||Array.isArray(raw.data.b))),d=isSnapshot?raw.data:raw;
-  const rooms=d.rooms||d.roomList||d.room_list,bookings=d.b||d.bookings||d.stays||d.reservations;
+  const raw=JSON.parse(t);
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))throw new Error('The selected JSON file must contain an object.');
+  const candidates=[raw,raw.data,raw.payload,raw.backup,raw.export,raw.records].filter(x=>x&&typeof x==='object'&&!Array.isArray(x));
+  const arrays=x=>({
+   rooms:x.rooms||x.roomList||x.room_list||x.roomRecords,
+   bookings:x.b||x.bookings||x.stays||x.reservations||x.bookingRecords,
+   guests:x.g||x.guests||x.guestList||x.guest_records,
+   expenses:x.exp||x.expenses,
+   inventory:x.inv||x.inventory||x.stock
+  });
+  let selected=null,shape=null;
+  for(const x of candidates){const a=arrays(x);if(Array.isArray(a.rooms)||Array.isArray(a.bookings)||Array.isArray(a.guests)){selected=x;shape=a;break}}
+  if(!selected)throw new Error('No rooms, guests or bookings arrays were found in this JSON file.');
+  const isSnapshot=!!(selected===raw.data||selected===raw.payload||selected===raw.backup||selected===raw.export||selected===raw.records) &&
+   Array.isArray(selected.rooms||selected.roomList||selected.room_list) &&
+   Array.isArray(selected.b||selected.bookings||selected.stays||selected.reservations) &&
+   (Array.isArray(selected.aud)||Array.isArray(selected.set)||Array.isArray(selected.hist)||Array.isArray(selected.menu)||selected===raw.data&&raw.v===2);
   if(isSnapshot){
-   if(!Array.isArray(rooms)||!Array.isArray(bookings))throw new Error('Backup is missing its room or booking list.');
-   const normal={...d,rooms,b:bookings};
-   normal.g=Array.isArray(d.g)?d.g:(d.guests||d.guestList||[]);
-   normal.t=Array.isArray(d.t)?d.t:(d.tables||[]);
-   normal.exp=Array.isArray(d.exp)?d.exp:(d.expenses||[]);
-   normal.inv=Array.isArray(d.inv)?d.inv:(d.inventory||[]);
-   normal.hist=Array.isArray(d.hist)?d.hist:(d.history||[0,0,0,0,0,0]);
+   const d=selected,normal={...d,rooms:shape.rooms,b:shape.bookings,g:Array.isArray(shape.guests)?shape.guests:[],t:Array.isArray(d.t)?d.t:(d.tables||[]),exp:Array.isArray(shape.expenses)?shape.expenses:[],inv:Array.isArray(shape.inventory)?shape.inventory:[],aud:Array.isArray(d.aud)?d.aud:(d.audit||[]),hist:Array.isArray(d.hist)?d.hist:(d.history||[0,0,0,0,0,0])};
    S.rst=normal;S.rstMode='snapshot';
-   ask('Restore this backup','Current app records will be replaced with the records in '+esc(raw.hotel||raw.hotelName||normal.set?.name||'this backup')+'.','Restore','restoreGo()');return;
+   ask('Restore this backup','Current app records will be replaced with records from '+esc(raw.hotel||raw.hotelName||d.set?.name||'this backup')+'.','Restore','restoreGo()');return;
   }
-  if(Array.isArray(d.bookings)||Array.isArray(d.guests)){
-   S.rst={rooms:Array.isArray(rooms)?rooms:[],b:Array.isArray(bookings)?bookings:[],g:Array.isArray(d.guests)?d.guests:[],exp:Array.isArray(d.expenses)?d.expenses:[],inv:Array.isArray(d.inventory)?d.inventory:[],aud:Array.isArray(d.audit)?d.audit:[]};
-   S.rstMode='export';ask('Import JSON records','This is a data export, not a full backup. Valid guests and bookings will be added; existing records will be kept.','Import records','restoreGo()');return;
-  }
-  throw new Error('Unsupported JSON format. Choose an Aurelia backup or an export containing guests/bookings.');
+  S.rst={rooms:Array.isArray(shape.rooms)?shape.rooms:[],b:Array.isArray(shape.bookings)?shape.bookings:[],g:Array.isArray(shape.guests)?shape.guests:[],exp:Array.isArray(shape.expenses)?shape.expenses:[],inv:Array.isArray(shape.inventory)?shape.inventory:[],aud:Array.isArray(selected.aud||selected.audit)?(selected.aud||selected.audit):[]};
+  S.rstMode='export';
+  const count=S.rst.rooms.length+S.rst.b.length+S.rst.g.length+S.rst.exp.length+S.rst.inv.length;
+  if(!count)throw new Error('JSON was readable but contains no importable records.');
+  ask('Import JSON records','Found '+S.rst.rooms.length+' rooms, '+S.rst.g.length+' guests, '+S.rst.b.length+' bookings, '+S.rst.exp.length+' expenses and '+S.rst.inv.length+' stock items. Existing records will be kept; matching records will be skipped.','Import records','restoreGo()');
  }).catch(e=>{console.error('JSON import:',e);toast('JSON import failed: '+(e.message||'invalid file'))}).finally(()=>{el.value=''});
 }
 function normaliseImportedBooking(b){
@@ -542,7 +551,8 @@ function parseIdOcrText(raw){
  idCandidates.sort((a,b)=>b.length-a.length);
  return {name:name.replace(/\s+/g,' ').trim(),id:idCandidates[0]||'',text:lines.join('\n')};
 }
-async function ocrUploadedId(file,target){if(!file)return;toast('Reading ID photo…');try{if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,7);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId]}if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text))}catch(e){toast('ID photo saved; OCR failed. Enter details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180))}}
+async // Removed an older non-async OCR implementation that contained await outside async and prevented the entire script from parsing.
+
 function applyUploadedOcr(target,d){const dr=S.dr;if(!dr)return;let changed=false;if(target==='main'){if(d.name){dr.g.n=d.name;changed=true}if(d.id){dr.g.idn=d.id;changed=true}}else if(target.startsWith('occ:')){const o=dr.oc[Number(target.split(':')[1])];if(o){if(d.name){o.n=d.name;changed=true}if(d.id){o.idn=d.id;changed=true}}}if(changed){aud('ID OCR','Suggested details from uploaded ID; staff verification required');dsheet();toast('OCR suggestions filled — verify against original')}else toast('ID photo saved; OCR found no confident name/number. Enter manually.')}
 const _aureliaNativeOcrResult=window.aureliaNativeOcrResult;
 window.aureliaNativeOcrResult=(requestId,payload)=>{const target=window.__aureliaOcrTargets&&window.__aureliaOcrTargets[requestId];if(target){delete window.__aureliaOcrTargets[requestId];try{const d=typeof payload==='string'?JSON.parse(payload):payload;applyUploadedOcr(target,{name:d.fullName||d.name||'',id:d.idNumber||d.id||'',text:d.text||''})}catch(e){toast('OCR result could not be read; enter details manually')}return}if(_aureliaNativeOcrResult)_aureliaNativeOcrResult(requestId,payload)};
