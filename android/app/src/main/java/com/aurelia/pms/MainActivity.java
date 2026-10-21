@@ -172,6 +172,12 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override public void onBackPressed(){if(webView!=null&&webView.canGoBack())webView.goBack();else super.onBackPressed();}
+    @Override public void onBackPressed(){
+        if(webView==null){super.onBackPressed();return;}
+        webView.evaluateJavascript("(function(){var s=document.getElementById('sh');if(s&&s.classList.contains('show')){closeS();return 'handled';}return 'unhandled';})()", value -> {
+            if("\"handled\"".equals(value)) return;
+            if(webView!=null&&webView.canGoBack()) webView.goBack(); else MainActivity.super.onBackPressed();
+        });
+    }
     @Override protected void onDestroy(){recognizer.close();if(webView!=null)webView.destroy();super.onDestroy();}
 }
