@@ -507,7 +507,36 @@ render();auto();
 
 /* OCR each ID photo upload; native ML Kit in APK and Tesseract.js fallback in browser. */
 window.__aureliaOcrTargets=window.__aureliaOcrTargets||{};
-function parseIdOcrText(raw){const lines=String(raw||'').replace(/\r/g,'').split('\n').map(x=>x.trim()).filter(Boolean);const idLine=lines.find(x=>/([A-Z]{1,3}[\t -]?\b[0-9][A-Z0-9/-]{4,}\b)|(\b[0-9]{6,}\b)/i.test(x))||'';const nameLine=lines.find(x=>/^(name|surname|given names?)\b/i.test(x))||lines.find(x=>/^[A-Z][A-Z ,.'-]{5,}$/.test(x)&&!/(GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICENCE|LICENSE|DATE OF BIRTH)/i.test(x))||'';return {name:nameLine.replace(/^(name|surname|given names?)\b[\t :.-]*/i,'').trim(),id:(idLine.match(/[A-Z0-9/-]{5,}/ig)||[]).sort((a,b)=>b.length-a.length)[0]||'',text:lines.join('\n')}}
+function parseIdOcrText(raw){
+ const text=String(raw||'').replace(/\r/g,'');
+ const lines=text.split(/\n+/).map(x=>x.replace(/[|_]+/g,' ').replace(/\s+/g,' ').trim()).filter(Boolean);
+ const excluded=/GOVERNMENT|REPUBLIC|AUTHORITY|IDENTITY|NATIONAL|PASSPORT|DRIVING|LICEN[CS]E|DATE OF BIRTH|\bDOB\b|\bMALE\b|\bFEMALE\b|ADDRESS|INDIA|INDIAN|ELECTION COMMISSION|UNIQUE IDENTIFICATION|AADHAAR|AADHAR|SIGNATURE|VALID/i;
+ const label=/^(?:full\s*name|name|surname|given\s*names?|holder\s*name)\s*[:：.-]?\s*/i;
+ let name='';
+ for(let i=0;i<lines.length;i++){
+  if(label.test(lines[i])){
+   const inline=lines[i].replace(label,'').trim();
+   if(inline&&!excluded.test(inline)&&!/\d/.test(inline)&&inline.split(/\s+/).length>=2){name=inline;break}
+   const next=lines.slice(i+1,i+3).find(x=>/^[A-Z][A-Z ,.'-]{3,}$/i.test(x)&&!excluded.test(x)&&!/\d/.test(x));
+   if(next){name=next;break}
+  }
+ }
+ if(!name){
+  const candidates=lines.filter(x=>/^[A-Z][A-Z ,.'-]{5,}$/i.test(x)&&!excluded.test(x)&&!label.test(x)&&!/(DOB|DATE|BIRTH|S/O|D/O|W/O|C/O)/i.test(x)&&!/[0-9]/.test(x)&&x.split(/\s+/).length>=2);
+  candidates.sort((a,b)=>{const score=s=>((s.match(/\s/g)||[]).length*3)+Math.min(s.length,40)-(excluded.test(s)?100:0);return score(b)-score(a)});
+  if(candidates.length)name=candidates[0];
+ }
+ const idCandidates=[];
+ for(const line of lines){
+  if(/DATE OF BIRTH|\bDOB\b|PHONE|MOBILE|PIN CODE|POSTAL|ADDRESS|ISSUE DATE|EXPIRY|VALID FROM/i.test(line))continue;
+  for(const match of line.match(/[A-Z0-9][A-Z0-9/-]{4,}/ig)||[]){
+   const value=match.replace(/[^A-Z0-9/-]/ig,'');
+   if(/\d/.test(value)&&value.length>=5&&!excluded.test(value))idCandidates.push(value);
+  }
+ }
+ idCandidates.sort((a,b)=>b.length-a.length);
+ return {name:name.replace(/\s+/g,' ').trim(),id:idCandidates[0]||'',text:lines.join('\n')};
+}
 async function ocrUploadedId(file,target){if(!file)return;toast('Reading ID photo…');try{if(window.AureliaNative){const small=await resizeForOcr(file),requestId='upload-'+Date.now()+'-'+Math.random().toString(36).slice(2,7);window.__aureliaOcrTargets[requestId]=target;if(nat({type:'recognizeId',requestId,name:file.name,mime:file.type,data:await fileBase64(small)}))return;delete window.__aureliaOcrTargets[requestId]}if(!window.Tesseract)await loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js');const result=await window.Tesseract.recognize(file,'eng');applyUploadedOcr(target,parseIdOcrText(result.data.text))}catch(e){toast('ID photo saved; OCR failed. Enter details manually.');aud('ID OCR failed',String(e&&e.message||e).slice(0,180))}}
 function applyUploadedOcr(target,d){const dr=S.dr;if(!dr)return;let changed=false;if(target==='main'){if(d.name){dr.g.n=d.name;changed=true}if(d.id){dr.g.idn=d.id;changed=true}}else if(target.startsWith('occ:')){const o=dr.oc[Number(target.split(':')[1])];if(o){if(d.name){o.n=d.name;changed=true}if(d.id){o.idn=d.id;changed=true}}}if(changed){aud('ID OCR','Suggested details from uploaded ID; staff verification required');dsheet();toast('OCR suggestions filled — verify against original')}else toast('ID photo saved; OCR found no confident name/number. Enter manually.')}
 const _aureliaNativeOcrResult=window.aureliaNativeOcrResult;
