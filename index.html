@@ -417,7 +417,7 @@ function restoreGo(){
    const rn=String(b.room).trim(),rk=roomKey(rn);
    if(!knownRooms.has(rk)){
     const template=S.rooms[0]||{};
-    S.rooms.push({...template,n:rn,t:template.t||'Imported',r:Number.isFinite(+template.r)?+template.r:0,s:'ready',demo:0});
+    S.rooms.push({...template,n:rn,t:'Imported',r:0,s:'ready',demo:0});
     knownRooms.add(rk);roomsAdded++;roomsCreatedForBooking++;
    }
    const duplicate=S.b.some(y=>String(y.g||'').trim().toLowerCase()===b.g.trim().toLowerCase()&&roomKey(y.room)===rk&&Number(y.in)===Number(b.in)&&Number(y.out)===Number(b.out));
