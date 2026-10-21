@@ -3,6 +3,7 @@ package com.aurelia.pms;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.ActivityNotFoundException;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -63,6 +64,8 @@ public class MainActivity extends Activity {
                 String type = q.optString("type");
                 if ("recognizeId".equals(type)) recognize(q);
                 else if ("printInvoice".equals(type)) runOnUiThread(() -> printHtml(q.optString("html", "")));
+                else if ("shareText".equals(type)) { String title=q.optString("title","Share"); String text=q.optString("text",""); runOnUiThread(() -> shareText(title,text)); }
+                else if ("openUrl".equals(type)) { String url=q.optString("url",""); runOnUiThread(() -> openExternalUrl(url)); }
                 else if ("saveFile".equals(type)) {
                     String name=q.optString("name","aurelia-export.bin"), mime=q.optString("mime","application/octet-stream");
                     String data=q.optString("data","");
@@ -110,6 +113,15 @@ public class MainActivity extends Activity {
         runOnUiThread(()->webView.evaluateJavascript(js,null));
     }
 
+    private void shareText(String title,String text) {
+        try { Intent i=new Intent(Intent.ACTION_SEND); i.setType("text/plain"); i.putExtra(Intent.EXTRA_SUBJECT,title); i.putExtra(Intent.EXTRA_TEXT,text); startActivity(Intent.createChooser(i,"Share using")); }
+        catch(Exception e){ toastJs("No compatible sharing app was found."); }
+    }
+    private void openExternalUrl(String url) {
+        try { if(url==null || !(url.startsWith("https://") || url.startsWith("http://"))) { toastJs("Invalid link."); return; } startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url))); }
+        catch(ActivityNotFoundException e){ toastJs("No app or browser can open this link."); }
+        catch(Exception e){ toastJs("Could not open the link."); }
+    }
     private void requestSaveFile(String name,String mime,String base64) {
         try {
             pendingExportBase64=base64;
